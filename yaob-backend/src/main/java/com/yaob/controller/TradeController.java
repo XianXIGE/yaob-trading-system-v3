@@ -23,6 +23,7 @@ public class TradeController {
     public Result<Void> control(@RequestBody ControlRequest req, HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         userService.updateControl(user.getId(), req.getOpenMargin(), req.getLeverage());
         return Result.success();
     }
@@ -31,6 +32,7 @@ public class TradeController {
     public Result<Void> setApiKeys(@RequestBody Map<String, String> body, HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         String apiKey = body.get("api_key");
         String apiSecret = body.get("api_secret");
         userService.setApiKeys(user.getId(), apiKey, apiSecret);
@@ -41,6 +43,7 @@ public class TradeController {
     public Result<Void> clearApiKeys(HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         userService.clearApiKeys(user.getId());
         return Result.<Void>success("已清除", null);
     }
@@ -49,6 +52,7 @@ public class TradeController {
     public Result<Map<String, Object>> toggleAutoTrade(HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         userService.toggleAutoTrade(user.getId());
         user = userService.findById(user.getId());
         Map<String, Object> data = new LinkedHashMap<>();
@@ -60,6 +64,7 @@ public class TradeController {
     public Result<Map<String, Object>> toggleMarginMode(HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         userService.toggleMarginMode(user.getId());
         user = userService.findById(user.getId());
         Map<String, Object> data = new LinkedHashMap<>();
@@ -71,6 +76,7 @@ public class TradeController {
     public Result<Map<String, Object>> toggleExcludeLargeCap(HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         userService.toggleExcludeLargeCap(user.getId());
         user = userService.findById(user.getId());
         Map<String, Object> data = new LinkedHashMap<>();

@@ -3,7 +3,9 @@ package com.yaob.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Mac;
@@ -27,6 +29,9 @@ public class BinanceFapiService {
 
     @Value("${fapi.proxy:http://127.0.0.1:7890}")
     private String proxyUrl;
+
+    @Autowired
+    private StringRedisTemplate redisTemplate;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -94,13 +99,13 @@ public class BinanceFapiService {
         return httpClient;
     }
 
-    public void setApiKeys(String key, String secret) {
+    public synchronized void setApiKeys(String key, String secret) {
         this.apiKey = key == null ? "" : key;
         this.apiSecret = secret == null ? "" : secret;
         this.dryRun = (apiKey.isBlank() || apiSecret.isBlank());
     }
 
-    public boolean isDryRun() {
+    public synchronized boolean isDryRun() {
         return dryRun;
     }
 
@@ -135,14 +140,39 @@ public class BinanceFapiService {
         return resp;
     }
 
+    private static final String TICKER_CACHE_KEY = "yaob:tickers";
+    private static final long TICKER_CACHE_TTL = 120; // 2分钟
+
     public List<Map<String, Object>> allTickers() throws IOException, InterruptedException {
+        // 先查 Redis 缓存
+        try {
+            String cached = redisTemplate.opsForValue().get(TICKER_CACHE_KEY);
+            if (cached != null && !cached.isEmpty()) {
+                List<Map<String, Object>> tickers = objectMapper.readValue(cached,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Object>>>() {});
+                log.info("allTickers: 从Redis缓存获取 {} 个交易对", tickers.size());
+                return tickers;
+            }
+        } catch (Exception e) {
+            log.warn("Redis缓存读取失败: {}", e.getMessage());
+        }
+
+        // 缓存未命中，请求币安
         JsonNode resp = _get("/fapi/v1/ticker/24hr", null, false);
         List<Map<String, Object>> tickers = new ArrayList<>();
         if (resp.isArray()) {
             for (JsonNode t : resp) {
                 tickers.add(objectMapper.convertValue(t, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
             }
-            log.info("allTickers: 获取到 {} 个交易对", tickers.size());
+            log.info("allTickers: 获取到 {} 个交易对, 写入Redis缓存", tickers.size());
+
+            // 写入 Redis 缓存
+            try {
+                String json = objectMapper.writeValueAsString(tickers);
+                redisTemplate.opsForValue().set(TICKER_CACHE_KEY, json, TICKER_CACHE_TTL, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception e) {
+                log.warn("Redis缓存写入失败: {}", e.getMessage());
+            }
         } else {
             log.warn("allTickers: 币安返回非数组响应: {}", resp.toString().substring(0, Math.min(500, resp.toString().length())));
         }
@@ -157,16 +187,22 @@ public class BinanceFapiService {
         return _get("/fapi/v1/klines", params, false);
     }
 
+    public JsonNode fundingRate(String symbol) throws IOException, InterruptedException {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("symbol", symbol);
+        return _get("/fapi/v1/premiumIndex", params, false);
+    }
+
     // ==================== Signed Endpoints ====================
 
-    public JsonNode account() throws IOException, InterruptedException {
+    public synchronized JsonNode account() throws IOException, InterruptedException {
         if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式(不实际下单)");
         Map<String, String> params = new LinkedHashMap<>();
         params.put("recvWindow", "5000");
         return _get("/fapi/v2/account", params, true);
     }
 
-    public JsonNode setLeverage(String symbol, int leverage) throws IOException, InterruptedException {
+    public synchronized JsonNode setLeverage(String symbol, int leverage) throws IOException, InterruptedException {
         if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式");
         Map<String, String> params = new LinkedHashMap<>();
         params.put("symbol", symbol);
@@ -174,7 +210,7 @@ public class BinanceFapiService {
         return _post("/fapi/v1/leverage", params, true);
     }
 
-    public JsonNode newOrder(String symbol, String side, double qty) throws IOException, InterruptedException {
+    public synchronized JsonNode newOrder(String symbol, String side, double qty) throws IOException, InterruptedException {
         if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式");
         String quantity = roundQty(symbol, qty, "down");
         Map<String, String> params = new LinkedHashMap<>();
@@ -189,7 +225,7 @@ public class BinanceFapiService {
     /**
      * 平仓: reduceOnly=true, 数量向上取整(ceil)到stepSize, 确保清仓彻底不残留碎单
      */
-    public JsonNode closePosition(String symbol, double qty, String side) throws IOException, InterruptedException {
+    public synchronized JsonNode closePosition(String symbol, double qty, String side) throws IOException, InterruptedException {
         if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式");
         String quantity = roundQty(symbol, qty, "up");
         Map<String, String> params = new LinkedHashMap<>();
@@ -264,7 +300,7 @@ public class BinanceFapiService {
         return handleResponse(response);
     }
 
-    private String buildQuery(Map<String, String> params, boolean signed) {
+    private synchronized String buildQuery(Map<String, String> params, boolean signed) {
         StringBuilder sb = new StringBuilder();
         if (params != null) {
             for (Map.Entry<String, String> e : params.entrySet()) {

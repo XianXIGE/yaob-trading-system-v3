@@ -51,6 +51,8 @@ public class DashboardController {
         vo.setStrategyStates(strategyStates);
         vo.setCandidatePool(rt.candidatePool);
         vo.setPositions(rt.positions);
+        vo.setDailyPnl(rt.dailyPnl);
+        vo.setCircuitBreaker(rt.circuitBreaker);
         return Result.success(vo);
     }
 }

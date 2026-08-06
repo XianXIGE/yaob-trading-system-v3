@@ -91,6 +91,29 @@
       </div>
     </div>
 
+    <!-- 风控状态 -->
+    <div class="yaob-card">
+      <div class="yaob-card-title">🛡️ 风控状态</div>
+      <div class="risk-items">
+        <div class="risk-item">
+          <span class="risk-label">当日盈亏</span>
+          <span :class="['risk-value', dailyPnl >= 0 ? 'profit' : 'loss']">
+            {{ dailyPnl.toFixed(2) }} U
+          </span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">熔断状态</span>
+          <span :class="['risk-value', circuitBreaker ? 'loss' : 'profit']">
+            {{ circuitBreaker ? '⚠️ 已熔断' : '✅ 正常' }}
+          </span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">持仓数</span>
+          <span class="risk-value">{{ positionsCount }} / 10</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Strategy States -->
     <div class="yaob-card" v-if="data?.strategyStates">
       <div class="yaob-card-title">策略状态</div>
@@ -140,6 +163,11 @@ const excludeLargeCap = ref(false)
 const editMargin = ref<number>(5)
 const editLeverage = ref<number>(5)
 const marginSaving = ref(false)
+
+// 风控状态
+const dailyPnl = computed(() => data.value?.dailyPnl ?? 0)
+const circuitBreaker = computed(() => data.value?.circuitBreaker ?? false)
+const positionsCount = computed(() => data.value?.positions?.length ?? 0)
 
 // Countdown
 const nextScanTime = ref<number>(0)
@@ -348,6 +376,40 @@ onUnmounted(() => {
 
 .label-off {
   color: #909399;
+}
+
+.risk-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.risk-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.risk-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.risk-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.risk-value.profit {
+  color: #00d68f;
+}
+
+.risk-value.loss {
+  color: #ff4d4f;
 }
 
 @media (max-width: 768px) {

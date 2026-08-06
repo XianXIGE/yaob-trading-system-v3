@@ -25,4 +25,6 @@ public class DashboardVO {
     private Map<String, Boolean> strategyStates;
     private List<Map<String, Object>> candidatePool;
     private List<Map<String, Object>> positions;
+    private double dailyPnl;
+    private boolean circuitBreaker;
 }

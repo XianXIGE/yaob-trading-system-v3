@@ -3,10 +3,12 @@ package com.yaob.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yaob.entity.*;
+import com.yaob.config.CryptoUtil;
 import com.yaob.mapper.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -36,6 +38,8 @@ public class TradeEngineService {
     private UserService userService;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private CryptoUtil cryptoUtil;
 
     // 运行时状态: userId -> runtime
     private final Map<Long, RuntimeState> runtimeMap = new ConcurrentHashMap<>();
@@ -49,6 +53,8 @@ public class TradeEngineService {
         public BigDecimal availableMargin = BigDecimal.ZERO;
         public List<Map<String, Object>> candidatePool = new ArrayList<>();
         public List<Map<String, Object>> positions = new ArrayList<>();
+        public double dailyPnl = 0;
+        public boolean circuitBreaker = false;
     }
 
     // 策略类型描述
@@ -76,7 +82,7 @@ public class TradeEngineService {
                 for (User user : traders) {
                     if (user.getBinanceApiKey() == null || user.getBinanceApiKey().isBlank()) continue;
                     try {
-                        fapi.setApiKeys(user.getBinanceApiKey(), user.getBinanceApiSecret());
+                        fapi.setApiKeys(cryptoUtil.decrypt(user.getBinanceApiKey()), cryptoUtil.decrypt(user.getBinanceApiSecret()));
                         if (!fapi.isDryRun()) {
                             RuntimeState rt = getRuntime(user.getId());
                             updateAccountAndPositions(rt, user);
@@ -161,8 +167,8 @@ public class TradeEngineService {
 
         try {
             // 设置 API keys (可能为空，不影响公开行情接口)
-            fapi.setApiKeys(user.getBinanceApiKey() != null ? user.getBinanceApiKey() : "",
-                    user.getBinanceApiSecret() != null ? user.getBinanceApiSecret() : "");
+            fapi.setApiKeys(user.getBinanceApiKey() != null ? cryptoUtil.decrypt(user.getBinanceApiKey()) : "",
+                    user.getBinanceApiSecret() != null ? cryptoUtil.decrypt(user.getBinanceApiSecret()) : "");
 
             // 获取 24h ticker 全市场数据
             log.info("[scan:{}] 开始获取币安行情...", user.getUsername());
@@ -184,6 +190,12 @@ public class TradeEngineService {
             // 生成候选池
             List<Map<String, Object>> pool = candidates(tickers, user, params, states);
             rt.candidatePool = pool;
+
+            // 更新当日盈亏和熔断状态
+            double dailyLoss = getDailyLoss(userId);
+            rt.dailyPnl = dailyLoss;
+            double totalAssets = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
+            rt.circuitBreaker = totalAssets > 0 && dailyLoss <= -(totalAssets * 0.02);
 
             // 自动交易
             if (Boolean.TRUE.equals(user.getAutoTradeEnabled())
@@ -518,6 +530,7 @@ public class TradeEngineService {
 
     // ==================== Auto Close Positions ====================
 
+    @Transactional
     @SuppressWarnings("unchecked")
     private void autoClosePositions(User user, Map<String, Map<String, Object>> tickers,
                                      Map<String, Map<String, Object>> params) {
@@ -584,7 +597,7 @@ public class TradeEngineService {
 
             // 修复: tp=0 或 sl=0 时从策略参数现取 (修复大小写不匹配 bug)
             if ((tp == 0 || sl == 0) && pos.getStrategy() != null) {
-                String sk = pos.getStrategy().toLowerCase();
+                String sk = pos.getStrategy().toUpperCase();
                 Map<String, Object> sp = params.get(sk);
                 if (sp != null) {
                     if (tp == 0) {
@@ -616,12 +629,53 @@ public class TradeEngineService {
                 reason = "sl";
             }
 
+            // 持仓超时检查（最长持仓48小时）
+            if (pos.getOpenedAt() != null) {
+                long holdHours = java.time.Duration.between(pos.getOpenedAt(), LocalDateTime.now()).toHours();
+                if (holdHours >= 48) {
+                    log.info("[auto-close:{}] {} 持仓超时{}h, 自动平仓", user.getUsername(), sym0, holdHours);
+                    shouldClose = true;
+                    reason = "timeout";
+                }
+            }
+
             if (shouldClose) {
                 try {
                     fapi.closePosition(sym0, qty, side);
                     log.info("[auto-close:{}] {} 已平 {} ({})", user.getUsername(), sym0, qty, side);
-                    closePositionRecord(pos, BigDecimal.valueOf(last), reason,
-                            BigDecimal.valueOf(pnl), BigDecimal.valueOf(ratio), userId);
+                    
+                    // 部分成交处理：平仓后重新查询实际持仓，判断是否完全平仓
+                    boolean fullyClosed = true;
+                    double remainingQty = 0;
+                    try {
+                        JsonNode acctAfter = fapi.account();
+                        JsonNode posAfter = acctAfter.get("positions");
+                        if (posAfter != null && posAfter.isArray()) {
+                            for (JsonNode p : posAfter) {
+                                if (sym0.equals(p.get("symbol").asText())) {
+                                    double amtAfter = p.get("positionAmt").asDouble();
+                                    if (Math.abs(amtAfter) > 0.0001) {
+                                        fullyClosed = false;
+                                        remainingQty = Math.abs(amtAfter);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("[auto-close:{}] {} 平仓后查询持仓失败，按已平处理: {}", user.getUsername(), sym0, e.getMessage());
+                    }
+                    
+                    if (fullyClosed) {
+                        // 完全平仓，归档记录
+                        closePositionRecord(pos, BigDecimal.valueOf(last), reason,
+                                BigDecimal.valueOf(pnl), BigDecimal.valueOf(ratio), userId);
+                    } else {
+                        // 部分成交：更新持仓数量，保持 OPEN 状态，下次扫描继续处理
+                        log.warn("[auto-close:{}] {} 部分成交, 剩余 {} 张, 保持持仓", user.getUsername(), sym0, remainingQty);
+                        pos.setQty(BigDecimal.valueOf(remainingQty));
+                        openPositionMapper.updateById(pos);
+                    }
                 } catch (Exception e) {
                     log.error("[auto-close:{}] {} 平仓失败: {}", user.getUsername(), sym0, e.getMessage());
                 }
@@ -629,6 +683,7 @@ public class TradeEngineService {
         }
     }
 
+    @Transactional
     private void closePositionRecord(OpenPosition pos, BigDecimal closePrice, String reason,
                                       BigDecimal pnl, BigDecimal pnlRatio, Long userId) {
         pos.setStatus("CLOSED");
@@ -690,12 +745,44 @@ public class TradeEngineService {
 
     // ==================== Auto Open Positions ====================
 
+    private double getDailyLoss(Long userId) {
+        try {
+            LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
+            List<TradeHistory> histories = tradeHistoryMapper.findAllByUserIdOrderByOpenedAtDesc(userId);
+            double dailyPnl = 0;
+            for (TradeHistory th : histories) {
+                if (th.getClosedAt() != null && th.getClosedAt().isAfter(todayStart)) {
+                    if (th.getPnl() != null) {
+                        dailyPnl += th.getPnl().doubleValue();
+                    }
+                }
+            }
+            return dailyPnl;
+        } catch (Exception e) {
+            log.warn("查询当日亏损失败: {}", e.getMessage());
+            return 0;
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private void autoOpenPositions(User user, RuntimeState rt,
                                     List<Map<String, Object>> pool,
                                     Map<String, Map<String, Object>> params,
                                     Map<String, Boolean> states) {
         Long userId = user.getId();
+
+        // 单日亏损熔断检查
+        double dailyLoss = getDailyLoss(userId);
+        double totalAssets = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
+        double maxDailyLoss = totalAssets * 0.02; // 2% 熔断
+        if (totalAssets > 0 && dailyLoss <= -maxDailyLoss) {
+            log.warn("[auto-trade:{}] 单日亏损 {}U 超过熔断线 {}U, 停止开仓", user.getUsername(), String.format("%.2f", dailyLoss), String.format("%.2f", -maxDailyLoss));
+            return;
+        }
+
+        // 总持仓上限检查
+        int currentPositions = openPositionMapper.findOpenByUserId(userId).size();
+        int maxTotalPositions = 10; // 最大同时持仓10个
 
         // 当前持仓币种集合
         Set<String> held = new HashSet<>();
@@ -718,7 +805,11 @@ public class TradeEngineService {
         int leverage = user.getLeverage() != null ? user.getLeverage() : 5;
 
         List<String> opened = new ArrayList<>();
-        int maxOpen = Math.min(3, pool.size());
+        int maxOpen = Math.min(3, Math.min(pool.size(), maxTotalPositions - currentPositions));
+        if (currentPositions >= maxTotalPositions) {
+            log.info("[auto-trade:{}] 已达最大持仓数{}, 跳过开仓", user.getUsername(), maxTotalPositions);
+            return;
+        }
         for (int i = 0; i < maxOpen; i++) {
             Map<String, Object> cand = pool.get(i);
             String sym0 = cand.get("symbol").toString().replace("/", "").toUpperCase();
@@ -737,14 +828,38 @@ public class TradeEngineService {
             if (qty <= 0) continue;
 
             try {
+                // 资金费率过滤：费率绝对值超过0.1%跳过（避免极端费率）
+                try {
+                    JsonNode fr = fapi.fundingRate(sym0);
+                    if (fr != null && fr.has("lastFundingRate")) {
+                        double rate = Double.parseDouble(fr.get("lastFundingRate").asText());
+                        if (Math.abs(rate) > 0.001) {
+                            log.info("[auto-trade:{}] {} 资金费率过高, 跳过", user.getUsername(), sym0);
+                            cand.put("unopen_reason", String.format("资金费率过高(%.4f)", rate));
+                            continue;
+                        }
+                    }
+                } catch (Exception e) {
+                    // 获取费率失败不阻断
+                }
+
                 fapi.setLeverage(sym0, leverage);
-                fapi.newOrder(sym0, side, qty);
+                JsonNode orderResult = fapi.newOrder(sym0, side, qty);
+                // 尝试从订单响应获取实际成交价
+                double actualPrice = price;
+                if (orderResult != null && orderResult.has("avgPrice")) {
+                    try {
+                        actualPrice = Double.parseDouble(orderResult.get("avgPrice").asText());
+                        if (actualPrice <= 0) actualPrice = price;
+                    } catch (Exception e) { /* 用ticker价格兜底 */ }
+                }
                 opened.add(cand.get("symbol").toString());
                 avail -= openMargin;
+                rt.availableMargin = BigDecimal.valueOf(avail);
 
                 // 记录持仓
                 String strategy = cand.get("strategy").toString();
-                String sk = strategy.toLowerCase();
+                String sk = strategy.toUpperCase();
                 Map<String, Object> sp = params.get(sk);
                 double tpRatio = sp != null ? getParamDouble(sp, "tp_ratio") : 0;
                 double slRatio = sp != null ? getParamDouble(sp, "sl_ratio") : 0;
@@ -755,7 +870,7 @@ public class TradeEngineService {
                 op.setStrategy(strategy);
                 op.setDirection(cand.get("direction").toString());
                 op.setQty(BigDecimal.valueOf(qty));
-                op.setEntryPrice(BigDecimal.valueOf(price));
+                op.setEntryPrice(BigDecimal.valueOf(actualPrice));
                 op.setLeverage(leverage);
                 op.setTpRatio(BigDecimal.valueOf(tpRatio));
                 op.setSlRatio(BigDecimal.valueOf(slRatio));
@@ -764,6 +879,7 @@ public class TradeEngineService {
                 openPositionMapper.insert(op);
 
                 held.add(sym0);
+                currentPositions++;
             } catch (Exception e) {
                 log.error("[auto-trade:{}] {} 开仓失败: {}", user.getUsername(), sym0, e.getMessage());
             }

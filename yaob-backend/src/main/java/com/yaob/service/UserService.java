@@ -7,6 +7,7 @@ import com.yaob.entity.StrategyConfig;
 import com.yaob.entity.User;
 import com.yaob.mapper.ExcludedSymbolMapper;
 import com.yaob.mapper.StrategyConfigMapper;
+import com.yaob.config.CryptoUtil;
 import com.yaob.mapper.UserMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,8 +34,10 @@ public class UserService {
     private ExcludedSymbolMapper excludedSymbolMapper;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private CryptoUtil cryptoUtil;
 
-    @Value("${admin.user:XJarvis}")
+    @Value("${admin.user:}")
     private String adminUser;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -44,8 +47,8 @@ public class UserService {
         // A: 做空，24h涨幅在[gain_min, gain_max] + 成交额达标
         Map<String, Object> a = new LinkedHashMap<>();
         a.put("lookback_days", 66);
-        a.put("gain_min", 0.36);
-        a.put("gain_max", 0.50);
+        a.put("gain_min", 36);
+        a.put("gain_max", 50);
         a.put("vol_min", 1e7);
         a.put("tp_ratio", 800);
         a.put("sl_ratio", -20);
@@ -53,7 +56,7 @@ public class UserService {
 
         // B: 做空，当日涨幅>=gain_threshold + 成交额达标
         Map<String, Object> b = new LinkedHashMap<>();
-        b.put("gain_threshold", 0.38);
+        b.put("gain_threshold", 38);
         b.put("vol_min", 1e7);
         b.put("tp_ratio", 60);
         b.put("sl_ratio", -20);
@@ -62,7 +65,7 @@ public class UserService {
         // C: 做多，从高点回撤>=drop_threshold + 成交额达标
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("lookback_days", 7);
-        c.put("drop_threshold", 0.96);
+        c.put("drop_threshold", 96);
         c.put("vol_min", 1e8);
         c.put("tp_ratio", 100);
         c.put("sl_ratio", -20);
@@ -71,7 +74,7 @@ public class UserService {
         // D: 做空，N分钟涨幅>=gain_threshold + 成交额达标
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("window_minutes", 5);
-        d.put("gain_threshold", 0.05);
+        d.put("gain_threshold", 5);
         d.put("vol_min", 1e7);
         d.put("tp_ratio", 60);
         d.put("sl_ratio", -20);
@@ -79,8 +82,13 @@ public class UserService {
 
         // E: 做多，冲高>=peak_gain后回落至<=retrace_target + 成交额达标
         Map<String, Object> e = new LinkedHashMap<>();
-        e.put("peak_gain_threshold", 0.50);
-        e.put("retrace_target_gain", 0.10);
+        e.put("gain_30d_min", 100);    // 30天涨幅下限(%)
+        e.put("ema_period", 50);        // EMA周期
+        e.put("pullback_min", 20);      // 回调下限(%)
+        e.put("pullback_max", 40);      // 回调上限(%)
+        e.put("fib_entry", 0.618);      // 斐波那契入场位
+        e.put("volume_mult", 1.5);      // 成交量放大倍数
+        e.put("rsi_threshold", 30);     // RSI回升阈值
         e.put("vol_min", 1e7);
         e.put("tp_ratio", 1200);
         e.put("sl_ratio", -86);
@@ -89,12 +97,12 @@ public class UserService {
         // F: 斐波那契双向
         Map<String, Object> f = new LinkedHashMap<>();
         f.put("lookback_hours", 48);
-        f.put("fib_long", 0.786);
-        f.put("fib_short", 0.618);
+        f.put("fib_long", 0.618);
+        f.put("fib_short", 0.382);
         f.put("tolerance_ratio", 0.1);
         f.put("vol_min", 3e7);
-        f.put("tp_ratio", 10);
-        f.put("sl_ratio", -15);
+        f.put("tp_ratio", 120);
+        f.put("sl_ratio", -20);
         DEFAULT_PARAMS.put("F", f);
     }
 
@@ -125,6 +133,9 @@ public class UserService {
         if (username.isEmpty() || password == null || password.isEmpty()) {
             throw new BusinessException("用户名和密码不能为空");
         }
+        if (password.length() < 6) {
+            throw new BusinessException("密码至少6位");
+        }
         if (userMapper.findByUsername(username) != null) {
             throw new BusinessException("用户名已存在");
         }
@@ -132,7 +143,7 @@ public class UserService {
         user.setUsername(username);
         user.setPasswordHash(passwordEncoder.encode(password));
         user.setIsVip(false);
-        user.setIsAdmin(username.equals(adminUser));
+        user.setIsAdmin(username.equals(adminUser) && !adminUser.isEmpty());
         user.setBinanceApiKey("");
         user.setBinanceApiSecret("");
         user.setAutoTradeEnabled(false);
@@ -197,8 +208,8 @@ public class UserService {
         }
         User user = userMapper.selectById(userId);
         if (user == null) throw new BusinessException("用户不存在");
-        user.setBinanceApiKey(apiKey.trim());
-        user.setBinanceApiSecret(apiSecret.trim());
+        user.setBinanceApiKey(cryptoUtil.encrypt(apiKey.trim()));
+        user.setBinanceApiSecret(cryptoUtil.encrypt(apiSecret.trim()));
         userMapper.updateById(user);
     }
 

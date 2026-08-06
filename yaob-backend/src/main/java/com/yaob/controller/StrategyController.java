@@ -33,6 +33,7 @@ public class StrategyController {
     public Result<Void> saveStrategyParams(@RequestBody Map<String, Object> body, HttpSession session) {
         User user = userService.getCurrentUser(session);
         if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
         @SuppressWarnings("unchecked")
         Map<String, Map<String, Object>> params = (Map<String, Map<String, Object>>) body.get("strategy_params");
         if (params == null) throw new BusinessException("参数格式错误");
