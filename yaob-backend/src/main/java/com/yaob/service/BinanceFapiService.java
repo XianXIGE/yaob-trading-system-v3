@@ -157,6 +157,11 @@ public class BinanceFapiService {
         return _get("/fapi/v1/klines", params, false);
     }
 
+    /** 全市场溢价指数（含资金费率 lastFundingRate） */
+    public JsonNode premiumIndex() throws IOException, InterruptedException {
+        return _get("/fapi/v1/premiumIndex", null, false);
+    }
+
     // ==================== Signed Endpoints ====================
 
     public JsonNode account() throws IOException, InterruptedException {

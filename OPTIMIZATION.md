@@ -18,3 +18,21 @@ docker compose up -d --build
 ```
 
 已有用户下次在前端重新保存 API Key 会自动加密。
+
+## 第二阶段（本提交）
+
+### 1. MarketDataService 共享行情缓存
+- 全市场 ticker Redis/本地缓存（默认 TTL 45s）
+- K 线缓存（默认 TTL 60s）
+- 资金费率缓存（premiumIndex，TTL 120s）
+- 多用户扫描共用同一份数据，降低币安限频风险
+
+### 2. StrategyChecker 策略拆分
+- A–F 策略检测从 TradeEngineService 抽离
+- TradeEngine 只负责调度，策略逻辑独立可测
+
+### 3. 资金费率过滤
+- 候选信号在 `|lastFundingRate| >= 0.3%` 时跳过，避免极端费率环境开仓
+
+### 4. BinanceFapiService
+- 新增 `premiumIndex()` 接口
