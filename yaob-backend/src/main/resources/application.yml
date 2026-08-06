@@ -130,6 +130,8 @@ risk:
   max-leverage: 10
   max-hold-minutes: 1440
   min-available-factor: 1.0
+  depth-notional-factor: 3.0
+  max-slippage: 0.005
 
 # ==================== API Key 加密 (V3.1) ====================
 crypto:

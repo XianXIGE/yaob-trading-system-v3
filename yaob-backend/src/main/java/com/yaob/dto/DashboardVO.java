@@ -25,4 +25,11 @@ public class DashboardVO {
     private Map<String, Boolean> strategyStates;
     private List<Map<String, Object>> candidatePool;
     private List<Map<String, Object>> positions;
+    private Double dailyPnl;
+    private Boolean dailyLossBreached;
+    private Integer maxPositions;
+    private Double maxTotalMargin;
+    private Double dailyLossLimit;
+    private Integer openPositionCount;
+    private List<Map<String, Object>> strategyWinRates;
 }

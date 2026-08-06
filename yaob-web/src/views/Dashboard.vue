@@ -25,6 +25,55 @@
       </div>
     </div>
 
+    <!-- Risk & Daily PnL (V3.1) -->
+    <div class="yaob-card">
+      <div class="yaob-card-title">
+        <span>风控状态</span>
+        <el-tag :type="data?.dailyLossBreached ? 'danger' : 'success'" size="small" effect="dark">
+          {{ data?.dailyLossBreached ? '日亏损熔断中' : '正常' }}
+        </el-tag>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">今日已实现盈亏</div>
+          <div class="stat-value" :class="pnlClass(data?.dailyPnl)">{{ formatPnl(data?.dailyPnl) }}</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">日亏损限额</div>
+          <div class="stat-value">{{ formatNum(data?.dailyLossLimit) }} U</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">持仓数 / 上限</div>
+          <div class="stat-value">{{ data?.openPositionCount ?? 0 }} / {{ data?.maxPositions ?? '-' }}</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">总保证金上限</div>
+          <div class="stat-value">{{ formatNum(data?.maxTotalMargin) }} U</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="yaob-card" v-if="data?.strategyWinRates?.length">
+      <div class="yaob-card-title">策略胜率</div>
+      <el-table :data="data.strategyWinRates" size="small" style="width: 100%">
+        <el-table-column prop="strategy" label="策略" width="70" />
+        <el-table-column prop="type" label="方向" width="100" />
+        <el-table-column prop="trades" label="笔数" width="70" />
+        <el-table-column label="胜率">
+          <template #default="{ row }">
+            <span :class="row.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg'">{{ row.win_rate }}%</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="累计盈亏%">
+          <template #default="{ row }">
+            <span :class="pnlClass(row.pnl_sum)">{{ row.pnl_sum }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="tp" label="止盈" width="60" />
+        <el-table-column prop="sl" label="止损" width="60" />
+      </el-table>
+    </div>
+
     <!-- Account Overview -->
     <div class="yaob-card">
       <div class="yaob-card-title">账户概览</div>
@@ -169,6 +218,18 @@ const statsItems = computed(() => [
   { label: '累计盈亏', value: stats.value?.totalPnl != null ? Number(stats.value.totalPnl).toFixed(2) : '-', color: (stats.value?.totalPnl ?? 0) >= 0 ? 'profit-color' : 'loss-color' },
 ])
 
+function formatPnl(v: any): string {
+  if (v == null || Number.isNaN(Number(v))) return '0.00 U'
+  const n = Number(v)
+  const sign = n > 0 ? '+' : ''
+  return sign + n.toFixed(2) + ' U'
+}
+function pnlClass(v: any): string {
+  const n = Number(v || 0)
+  if (n > 0) return 'pnl-pos'
+  if (n < 0) return 'pnl-neg'
+  return ''
+}
 function formatNum(v: any): string {
   if (v == null) return '-'
   return Number(v).toFixed(2)
@@ -360,4 +421,5 @@ onUnmounted(() => {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+.pnl-pos{color:#00c853;font-weight:600}.pnl-neg{color:#ff5252;font-weight:600}
 </style>

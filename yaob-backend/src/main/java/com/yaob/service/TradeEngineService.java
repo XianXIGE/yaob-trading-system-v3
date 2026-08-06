@@ -41,6 +41,8 @@ public class TradeEngineService {
     @Autowired
     private StrategyChecker strategyChecker;
     @Autowired
+    private LiquidityChecker liquidityChecker;
+    @Autowired
     private ObjectMapper objectMapper;
 
     // 运行时状态: userId -> runtime
@@ -532,6 +534,14 @@ public class TradeEngineService {
             double price = getDouble(cand, "current_price");
             double qty = price > 0 ? openMargin * leverage / price : 0;
             if (qty <= 0) continue;
+
+            double notional = openMargin * leverage;
+            LiquidityChecker.DepthResult depth = liquidityChecker.check(sym0, side, notional);
+            if (!depth.isOk()) {
+                cand.put("unopen_reason", "深度拒绝: " + depth.getReason());
+                log.info("[auto-open:{}] {} 深度不足: {}", user.getUsername(), sym0, depth.getReason());
+                continue;
+            }
 
             try {
                 fapi.setLeverage(sym0, leverage);

@@ -101,6 +101,16 @@ public class RiskManager {
         }
     }
 
+    public Double getDailyPnl(Long userId) {
+        if (userId == null || redisTemplate == null) return 0.0;
+        try {
+            String val = redisTemplate.opsForValue().get(dailyPnlKey(userId));
+            return val == null ? 0.0 : Double.parseDouble(val);
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+
     public List<OpenPosition> findTimeoutPositions(Long userId) {
         int maxHold = riskProps.getMaxHoldMinutes();
         if (maxHold <= 0) return List.of();

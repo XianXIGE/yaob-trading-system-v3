@@ -162,6 +162,13 @@ public class BinanceFapiService {
         return _get("/fapi/v1/premiumIndex", null, false);
     }
 
+    public JsonNode depth(String symbol, int limit) throws IOException, InterruptedException {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("symbol", symbol);
+        params.put("limit", String.valueOf(limit));
+        return _get("/fapi/v1/depth", params, false);
+    }
+
     // ==================== Signed Endpoints ====================
 
     public JsonNode account() throws IOException, InterruptedException {

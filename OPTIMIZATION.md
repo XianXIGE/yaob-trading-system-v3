@@ -36,3 +36,8 @@ docker compose up -d --build
 
 ### 4. BinanceFapiService
 - 新增 `premiumIndex()` 接口
+
+## 第三阶段
+1. LiquidityChecker：开仓前 depth(20) 深度与滑点检查
+2. Dashboard API：日盈亏、熔断、持仓上限、策略胜率
+3. 前端：风控状态卡片 + 策略胜率表
