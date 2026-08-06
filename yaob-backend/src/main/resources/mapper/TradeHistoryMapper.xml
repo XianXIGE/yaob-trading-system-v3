@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yaob.mapper.TradeHistoryMapper">
+    <select id="findByUserIdOrderByOpenedAtDesc" resultType="TradeHistory">
+        SELECT * FROM trade_history WHERE user_id = #{userId} ORDER BY opened_at DESC LIMIT #{limit}
+    </select>
+    <select id="findAllByUserIdOrderByOpenedAtDesc" resultType="TradeHistory">
+        SELECT * FROM trade_history WHERE user_id = #{userId} ORDER BY opened_at DESC
+    </select>
+</mapper>

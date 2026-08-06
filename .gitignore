@@ -1,0 +1,29 @@
+# Java
+yaob-backend/target/
+*.jar
+*.class
+
+# Node
+yaob-web/node_modules/
+yaob-web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+
+# Env
+.env
+*.env.local
+
+# Docker data
+mysql_data/
+redis_data/

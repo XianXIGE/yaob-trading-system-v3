@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yaob.mapper.OpenPositionMapper">
+    <select id="findOpenByUserId" resultType="OpenPosition">
+        SELECT * FROM open_positions WHERE user_id = #{userId} AND status = 'OPEN' ORDER BY opened_at DESC
+    </select>
+    <select id="findOpenByUserIdAndSymbol" resultType="OpenPosition">
+        SELECT * FROM open_positions WHERE user_id = #{userId} AND symbol = #{symbol} AND status = 'OPEN'
+    </select>
+</mapper>

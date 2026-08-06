@@ -1,0 +1,122 @@
+server:
+  port: 8100
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3307/yaob_v3?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: yaob
+    password: ${DB_PASSWORD:yaob_pass_2026}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      timeout: 3000ms
+  jackson:
+    default-property-inclusion: non_null
+
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.yaob.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# 币安合约 API
+fapi:
+  base: https://fapi.binance.com
+  proxy: http://127.0.0.1:7890
+
+# CoinGecko 市值接口
+coingecko:
+  proxy: http://127.0.0.1:7890
+
+# 管理员用户名
+admin:
+  user: XJarvis
+
+# 策略默认参数 (v2 精确翻译)
+strategy:
+  defaults:
+    A:
+      lookback_days: 66
+      gain_min: 0.36
+      gain_max: 0.50
+      vol_min: 10000000
+      tp_ratio: 800
+      sl_ratio: -20
+    B:
+      gain_threshold: 0.38
+      vol_min: 10000000
+      tp_ratio: 60
+      sl_ratio: -20
+    C:
+      lookback_days: 7
+      drop_threshold: 0.96
+      vol_min: 100000000
+      tp_ratio: 100
+      sl_ratio: -20
+    D:
+      window_minutes: 5
+      gain_threshold: 0.05
+      vol_min: 10000000
+      tp_ratio: 60
+      sl_ratio: -20
+    E:
+      peak_gain_threshold: 0.50
+      retrace_target_gain: 0.10
+      vol_min: 10000000
+      tp_ratio: 1200
+      sl_ratio: -86
+    F:
+      lookback_hours: 48
+      fib_long: 0.786
+      fib_short: 0.618
+      tolerance_ratio: 0.1
+      vol_min: 30000000
+      tp_ratio: 10
+      sl_ratio: -15
+
+# 默认大盘币黑名单
+excluded:
+  default-large-cap:
+    - BTCUSDT
+    - ETHUSDT
+    - BNBUSDT
+    - SOLUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - DOGEUSDT
+    - DOTUSDT
+    - LINKUSDT
+    - LTCUSDT
+    - BCHUSDT
+    - AVAXUSDT
+    - SHIBUSDT
+    - TONUSDT
+    - TRXUSDT
+    - UNIUSDT
+    - ATOMUSDT
+    - XLMUSDT
+    - FILUSDT
+    - SUIUSDT
+    - NEARUSDT
+    - APTUSDT
+    - ARBUSDT
+    - OPUSDT
+    - INJUSDT
+    - SEIUSDT
+    - HBARUSDT
+    - ICPUSDT
+    - RENDERUSDT
+    - WIFUSDT
+    - TRUMPUSDT
+    - 1000PEPEUSDT
+    - ETCUSDT
+
+logging:
+  level:
+    com.yaob: INFO
