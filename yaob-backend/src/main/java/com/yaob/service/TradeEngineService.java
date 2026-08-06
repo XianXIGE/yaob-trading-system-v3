@@ -35,6 +35,8 @@ public class TradeEngineService {
     @Autowired
     private UserService userService;
     @Autowired
+    private RiskManager riskManager;
+    @Autowired
     private ObjectMapper objectMapper;
 
     // 运行时状态: userId -> runtime
@@ -76,7 +78,8 @@ public class TradeEngineService {
                 for (User user : traders) {
                     if (user.getBinanceApiKey() == null || user.getBinanceApiKey().isBlank()) continue;
                     try {
-                        fapi.setApiKeys(user.getBinanceApiKey(), user.getBinanceApiSecret());
+                        String[] keys = userService.getDecryptedApiKeys(user);
+                        fapi.setApiKeys(keys[0], keys[1]);
                         if (!fapi.isDryRun()) {
                             RuntimeState rt = getRuntime(user.getId());
                             updateAccountAndPositions(rt, user);
@@ -160,9 +163,9 @@ public class TradeEngineService {
         long startTime = System.currentTimeMillis();
 
         try {
-            // 设置 API keys (可能为空，不影响公开行情接口)
-            fapi.setApiKeys(user.getBinanceApiKey() != null ? user.getBinanceApiKey() : "",
-                    user.getBinanceApiSecret() != null ? user.getBinanceApiSecret() : "");
+            // 设置 API keys（解密后使用，兼容历史明文）
+            String[] keys = userService.getDecryptedApiKeys(user);
+            fapi.setApiKeys(keys[0], keys[1]);
 
             // 获取 24h ticker 全市场数据
             log.info("[scan:{}] 开始获取币安行情...", user.getUsername());
@@ -525,6 +528,11 @@ public class TradeEngineService {
         List<OpenPosition> openPositions = openPositionMapper.findOpenByUserId(userId);
         if (openPositions.isEmpty()) return;
 
+        java.util.Set<Long> timeoutIds = new java.util.HashSet<>();
+        for (OpenPosition tp : riskManager.findTimeoutPositions(userId)) {
+            timeoutIds.add(tp.getId());
+        }
+
         // 获取实时持仓
         Map<String, JsonNode> livePositions = new HashMap<>();
         try {
@@ -603,10 +611,14 @@ public class TradeEngineService {
 
             String side = amt > 0 ? "SELL" : "BUY";
 
-            // 触发止盈或止损
+            // 触发超时 / 止盈 / 止损
             boolean shouldClose = false;
             String reason = null;
-            if (tp > 0 && ratio >= tp) {
+            if (timeoutIds.contains(pos.getId())) {
+                log.info("[auto-close:{}] {} 持仓超时强制平仓", user.getUsername(), sym0);
+                shouldClose = true;
+                reason = "timeout";
+            } else if (tp > 0 && ratio >= tp) {
                 log.info("[auto-close:{}] {} 止盈 ratio={}% >= tp={}", user.getUsername(), sym0, String.format("%.2f", ratio), tp);
                 shouldClose = true;
                 reason = "tp";
@@ -657,8 +669,11 @@ public class TradeEngineService {
         th.setClosedAt(LocalDateTime.now());
         tradeHistoryMapper.insert(th);
 
-        // 更新策略统计
+        // 更新策略统计 + 日盈亏（用于熔断）
         updateStrategyStats(userId, pos.getStrategy(), reason, pnl);
+        if (pnl != null) {
+            riskManager.recordRealizedPnl(userId, pnl);
+        }
     }
 
     private void updateStrategyStats(Long userId, String strategy, String reason, BigDecimal pnl) {
@@ -728,6 +743,15 @@ public class TradeEngineService {
             // 保证金门槛
             if (avail < openMargin) {
                 cand.put("unopen_reason", String.format("保证金不足(%.2f<%.2f)", avail, openMargin));
+                continue;
+            }
+
+            // ===== 统一风控检查 =====
+            RiskManager.RiskDecision decision = riskManager.canOpen(
+                    user, avail, held.size() + opened.size(), openMargin, leverage);
+            if (!decision.isAllowed()) {
+                cand.put("unopen_reason", "风控拒绝: " + decision.getReason());
+                log.info("[auto-open:{}] {} 被风控拦截: {}", user.getUsername(), sym0, decision.getReason());
                 continue;
             }
 

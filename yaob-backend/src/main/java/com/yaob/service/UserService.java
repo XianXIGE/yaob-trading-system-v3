@@ -1,6 +1,8 @@
 package com.yaob.service;
 
 import com.yaob.common.BusinessException;
+import com.yaob.config.CryptoProperties;
+import com.yaob.util.AesEncryptor;
 import com.yaob.dto.RegisterRequest;
 import com.yaob.entity.ExcludedSymbol;
 import com.yaob.entity.StrategyConfig;
@@ -33,11 +35,28 @@ public class UserService {
     private ExcludedSymbolMapper excludedSymbolMapper;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private CryptoProperties cryptoProperties;
 
     @Value("${admin.user:XJarvis}")
     private String adminUser;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private AesEncryptor encryptor;
+
+    private AesEncryptor enc() {
+        if (encryptor == null) {
+            encryptor = new AesEncryptor(cryptoProperties.getSecret());
+        }
+        return encryptor;
+    }
+
+    public String[] getDecryptedApiKeys(User user) {
+        if (user == null) return new String[]{"", ""};
+        String key = enc().decrypt(user.getBinanceApiKey() == null ? "" : user.getBinanceApiKey());
+        String secret = enc().decrypt(user.getBinanceApiSecret() == null ? "" : user.getBinanceApiSecret());
+        return new String[]{key, secret};
+    }
 
     private static final Map<String, Map<String, Object>> DEFAULT_PARAMS = new LinkedHashMap<>();
     static {
@@ -197,9 +216,10 @@ public class UserService {
         }
         User user = userMapper.selectById(userId);
         if (user == null) throw new BusinessException("用户不存在");
-        user.setBinanceApiKey(apiKey.trim());
-        user.setBinanceApiSecret(apiSecret.trim());
+        user.setBinanceApiKey(enc().encrypt(apiKey.trim()));
+        user.setBinanceApiSecret(enc().encrypt(apiSecret.trim()));
         userMapper.updateById(user);
+        log.info("[security] userId={} API Key 已加密存储", userId);
     }
 
     public void clearApiKeys(Long userId) {

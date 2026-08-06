@@ -120,3 +120,17 @@ excluded:
 logging:
   level:
     com.yaob: INFO
+
+# ==================== 风控默认参数 (V3.1) ====================
+risk:
+  max-positions: 3
+  max-total-margin: 50.0
+  daily-loss-limit: 30.0
+  max-open-margin: 20.0
+  max-leverage: 10
+  max-hold-minutes: 1440
+  min-available-factor: 1.0
+
+# ==================== API Key 加密 (V3.1) ====================
+crypto:
+  secret: ${CRYPTO_SECRET:yaob-change-me-in-production-2026}
