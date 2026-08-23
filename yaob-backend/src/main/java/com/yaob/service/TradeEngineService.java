@@ -44,6 +44,38 @@ public class TradeEngineService {
     // 运行时状态: userId -> runtime
     private final Map<Long, RuntimeState> runtimeMap = new ConcurrentHashMap<>();
 
+    // BTC趋势缓存: {timestamp, aboveMA20} —— 每次扫描刷新一次
+    private volatile boolean btcAboveMA20 = true;
+    private volatile long btcTrendTs = 0;
+
+    /** 刷新BTC趋势状态: 拉BTCUSDT 4h K线120根(≈20天), 判断现价是否在MA120上方 */
+    private void refreshBtcTrend() {
+        try {
+            JsonNode k = fapi.klines("BTCUSDT", "4h", 130);
+            if (k == null || !k.isArray() || k.size() < 120) return;
+            double sum = 0;
+            for (int i = k.size() - 120; i < k.size(); i++) {
+                sum += k.get(i).get(4).asDouble(); // 收盘价
+            }
+            double ma120 = sum / 120;
+            double cur = k.get(k.size() - 1).get(4).asDouble();
+            btcAboveMA20 = cur > ma120;
+            btcTrendTs = System.currentTimeMillis();
+            log.info("[BTC趋势] 现价{} MA120(4h){} -> {}", String.format("%.0f", cur), String.format("%.0f", ma120), btcAboveMA20 ? "强势(线上)" : "弱势(线下)");
+        } catch (Exception e) {
+            log.warn("[BTC趋势] 获取失败, 保持上次状态: {}", e.getMessage());
+        }
+    }
+
+    /** BTC是否处于上升趋势(现价>MA120_4h) */
+    private boolean isBtcBullish() {
+        // 缓存有效期30分钟
+        if (System.currentTimeMillis() - btcTrendTs > 30 * 60 * 1000) {
+            refreshBtcTrend();
+        }
+        return btcAboveMA20;
+    }
+
     public static class RuntimeState {
         public String scannerStatus = "⏳ 倒计时";
         public double lastScanDuration = 0.0;
@@ -162,6 +194,8 @@ public class TradeEngineService {
         userService.checkVipExpiry(user);
 
         rt.scannerStatus = "正在扫描...";
+        // 刷新BTC趋势状态(大盘过滤器)
+        refreshBtcTrend();
         rt.scanStartTimestamp = System.currentTimeMillis() / 1000;
         long startTime = System.currentTimeMillis();
 
@@ -502,23 +536,26 @@ public class TradeEngineService {
             // 容差: 按区间百分比
             double tol = getParamDouble(p, "tolerance_ratio") / 100.0 * rng;
 
-            // 做空: 价格反弹至 fib_short 位 (lo + rng * fs)
+            // 大盘过滤器: BTC强势时只做多, BTC弱势时只做空 (顺大盘方向)
+            boolean btcBull = isBtcBullish();
+
+            // 做空: 价格反弹至 fib_short 位 (lo + rng * fs) -- 仅BTC弱势时触发
             double shortPrice = lo + rng * fs;
-            if (Math.abs(cur - shortPrice) <= tol) {
+            if (Math.abs(cur - shortPrice) <= tol && !btcBull) {
                 Map<String, Object> sig = new LinkedHashMap<>();
                 sig.put("strategy", "F");
                 sig.put("direction", "SHORT");
-                sig.put("reason", String.format("斐波那契做空(反弹至%.1f%%, 阻力%.4f)", fs * 100, shortPrice));
+                sig.put("reason", String.format("斐波那契做空(反弹至%.1f%%, 阻力%.4f) [BTC弱势]", fs * 100, shortPrice));
                 sig.put("threshold_ratio", fs * 100);
                 return sig;
             }
-            // 做多: 价格回撤至 fib_long 位 (hi - rng * fl)
+            // 做多: 价格回撤至 fib_long 位 (hi - rng * fl) -- 仅BTC强势时触发
             double longPrice = hi - rng * fl;
-            if (Math.abs(cur - longPrice) <= tol) {
+            if (Math.abs(cur - longPrice) <= tol && btcBull) {
                 Map<String, Object> sig = new LinkedHashMap<>();
                 sig.put("strategy", "F");
                 sig.put("direction", "LONG");
-                sig.put("reason", String.format("斐波那契做多(回撤至%.1f%%, 支撑%.4f)", fl * 100, longPrice));
+                sig.put("reason", String.format("斐波那契做多(回撤至%.1f%%, 支撑%.4f) [BTC强势]", fl * 100, longPrice));
                 sig.put("threshold_ratio", fl * 100);
                 return sig;
             }

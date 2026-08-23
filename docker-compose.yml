@@ -50,7 +50,7 @@ services:
 
   # ===================== Java 后端 =====================
   backend:
-    image: yaob-backend:3.0.0
+    image: yaob-backend:3.0.1
     container_name: yaob-backend
     restart: always
     depends_on:
@@ -68,6 +68,7 @@ services:
       FAPI_PROXY: http://host.docker.internal:10809
       ADMIN_USER: XJarvis
       YAOB_ENCRYPTION_KEY: ${YAOB_ENC_KEY:-yaob-v3-prod-encryption-2026}
+      COINGECKO_PROXY: http://host.docker.internal:10809
     ports:
       - "8101:8100"
     extra_hosts:
