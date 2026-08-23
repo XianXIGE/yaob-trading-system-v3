@@ -115,9 +115,9 @@ async function handleClearAll() {
 
 async function handleRestoreDefault() {
   try {
-    await ElMessageBox.confirm('确定要恢复默认币种市值吗？将自动拉取币安市值超20亿的币添加到币种市值。', '恢复默认币种市值', { type: 'info' })
+    await ElMessageBox.confirm('确定要恢复默认币种市值吗？将重新添加BTC、ETH等33个大盘币。', '恢复默认币种市值', { type: 'info' })
     await restoreDefaultExcluded()
-    ElMessage.success('已恢复默认币种市值（自动拉取市值>20亿的币）')
+    ElMessage.success('已恢复默认币种市值过滤列表')
     await fetchData()
   } catch { /* cancelled or error */ }
 }

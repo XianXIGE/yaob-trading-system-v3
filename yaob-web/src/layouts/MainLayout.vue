@@ -16,7 +16,7 @@
       <div class="header-right">
         <span class="user-name hide-on-mobile">{{ auth.user?.username }}</span>
         <span v-if="auth.isVip" class="vip-badge">VIP</span>
-        <el-button size="small" plain @click="showPwdDialog = true">改密码</el-button>
+        <el-button size="small" plain @click="showPwdDialog = true">修改密码</el-button>
         <el-button type="danger" size="small" plain @click="handleLogout">退出</el-button>
       </div>
     </el-header>

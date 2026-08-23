@@ -27,7 +27,7 @@ import java.util.*;
 @Service
 public class CoinGeckoService {
 
-    @Value("${coingecko.proxy:http://127.0.0.1:7890}")
+    @Value("${coingecko.proxy:http://127.0.0.1:10809}")
     private String proxyUrl;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
