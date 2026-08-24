@@ -8,6 +8,10 @@ export function toggleMarginMode() {
   return request.post('/toggle_margin_mode')
 }
 
+export function togglePositionMode() {
+  return request.post('/toggle_position_mode')
+}
+
 export function toggleExcludeLargeCap() {
   return request.post('/toggle_exclude_large_cap')
 }

@@ -18,6 +18,7 @@ public class DashboardVO {
     private Integer leverage;
     private Boolean autoTradeEnabled;
     private String marginMode;
+    private String positionMode;
     private Boolean excludeLargeCap;
     private Boolean hasApiKey;
     private Boolean isVip;
@@ -26,5 +27,7 @@ public class DashboardVO {
     private List<Map<String, Object>> candidatePool;
     private List<Map<String, Object>> positions;
     private double dailyPnl;
+    private double realizedPnl;
+    private double unrealizedPnl;
     private boolean circuitBreaker;
 }

@@ -30,6 +30,8 @@ public class User {
     @TableField("auto_trade_enabled")
     private Boolean autoTradeEnabled;
     private String marginMode;
+    @TableField("position_mode")
+    private String positionMode;
     @TableField("open_margin")
     private BigDecimal openMargin;
     private Integer leverage;

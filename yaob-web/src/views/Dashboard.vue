@@ -67,6 +67,16 @@
           />
         </div>
         <div class="control-item">
+          <span class="control-label">持仓模式</span>
+          <el-switch
+            v-model="hedgeMode"
+            active-text="双向"
+            inactive-text="单向"
+            @change="handleTogglePositionMode"
+            :loading="ctrlLoading"
+          />
+        </div>
+        <div class="control-item">
           <span class="control-label">排除大盘币</span>
           <el-switch v-model="excludeLargeCap" @change="handleToggleExcludeLargeCap" :loading="ctrlLoading" />
         </div>
@@ -99,6 +109,18 @@
           <span class="risk-label">当日盈亏</span>
           <span :class="['risk-value', dailyPnl >= 0 ? 'profit' : 'loss']">
             {{ dailyPnl.toFixed(2) }} U
+          </span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">今日已实现盈亏</span>
+          <span :class="['risk-value', realizedPnl >= 0 ? 'profit' : 'loss']">
+            {{ realizedPnl.toFixed(2) }} U
+          </span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">持仓浮动盈亏</span>
+          <span :class="['risk-value', unrealizedPnl >= 0 ? 'profit' : 'loss']">
+            {{ unrealizedPnl.toFixed(2) }} U
           </span>
         </div>
         <div class="risk-item">
@@ -145,7 +167,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Key } from '@element-plus/icons-vue'
 import { getDashboard, getStats } from '@/api/dashboard'
-import { toggleAutoTrade, toggleMarginMode, toggleExcludeLargeCap, control } from '@/api/trade'
+import { toggleAutoTrade, toggleMarginMode, togglePositionMode, toggleExcludeLargeCap, control } from '@/api/trade'
 import PositionTable from '@/components/PositionTable.vue'
 import CandidateTable from '@/components/CandidateTable.vue'
 import StatsCard from '@/components/StatsCard.vue'
@@ -159,6 +181,7 @@ const showApiDialog = ref(false)
 
 const autoTrade = ref(false)
 const crossMode = ref(false)
+const hedgeMode = ref(false)
 const excludeLargeCap = ref(false)
 const editMargin = ref<number>(5)
 const editLeverage = ref<number>(5)
@@ -166,6 +189,8 @@ const marginSaving = ref(false)
 
 // 风控状态
 const dailyPnl = computed(() => data.value?.dailyPnl ?? 0)
+const realizedPnl = computed(() => data.value?.realizedPnl ?? 0)
+const unrealizedPnl = computed(() => data.value?.unrealizedPnl ?? 0)
 const circuitBreaker = computed(() => data.value?.circuitBreaker ?? false)
 const positionsCount = computed(() => data.value?.positions?.length ?? 0)
 
@@ -213,6 +238,7 @@ async function fetchData() {
     stats.value = statsData
     autoTrade.value = dashData?.autoTradeEnabled ?? false
     crossMode.value = dashData?.marginMode === 'cross'
+    hedgeMode.value = dashData?.positionMode === 'hedge'
     excludeLargeCap.value = dashData?.excludeLargeCap ?? false
     editMargin.value = dashData?.openMargin ?? 5
     editLeverage.value = dashData?.leverage ?? 5
@@ -257,6 +283,19 @@ async function handleToggleMarginMode(val: boolean) {
     await fetchData()
   } catch {
     crossMode.value = !val
+  } finally {
+    ctrlLoading.value = false
+  }
+}
+
+async function handleTogglePositionMode(val: boolean) {
+  ctrlLoading.value = true
+  try {
+    await togglePositionMode()
+    ElMessage.success(`已切换为${val ? '双向' : '单向'}持仓模式`)
+    await fetchData()
+  } catch {
+    hedgeMode.value = !val
   } finally {
     ctrlLoading.value = false
   }

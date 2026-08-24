@@ -127,7 +127,7 @@ public class ExcludedSymbolService {
         for (ExcludedSymbol e : all) {
             existingSymbols.add(e.getSymbol());
         }
-        // 从 CoinGecko 拉取市值>阈值的币，过滤币安合约可交易，增量添加为币种市值
+        // 从 CoinGecko 拉取市值>阈值的币，过滤币安合约可交易，增量添加为大盘币(large_cap)
         // 注意：不删除任何已有记录（用户手动添加的保留，避免误删）
         Set<String> binance = Collections.emptySet();
         try {
@@ -138,16 +138,16 @@ public class ExcludedSymbolService {
         List<String> highCap = coinGeckoService.fetchHighCapSymbols(binance);
         int added = 0;
         for (String sym : highCap) {
-            if (existingSymbols.contains(sym)) continue; // 跳过已在黑名单（含股指市值/手动添加）的币
+            if (existingSymbols.contains(sym)) continue; // 跳过已在黑名单（含大盘币/手动添加）的币
             ExcludedSymbol ex = new ExcludedSymbol();
             ex.setUserId(userId);
             ex.setSymbol(sym);
-            ex.setCategory("manual");
+            ex.setCategory("large_cap");
             excludedSymbolMapper.insert(ex);
             existingSymbols.add(sym);
             added++;
         }
-        log.info("恢复币种市值：市值>阈值{}/20亿 的币 {} 个，新增 {} 个",
+        log.info("恢复大盘币：市值>阈值{}/20亿 的币 {} 个，新增 {} 个",
                 CoinGeckoService.MARKET_CAP_THRESHOLD, highCap.size(), added);
         return added;
     }

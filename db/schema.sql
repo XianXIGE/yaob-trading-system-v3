@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `binance_api_secret`  VARCHAR(256) NOT NULL DEFAULT '' COMMENT '币安API Secret',
   `auto_trade_enabled`  TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '自动交易开关',
   `margin_mode`         VARCHAR(16)  NOT NULL DEFAULT 'isolated' COMMENT '全仓/逐仓: cross/isolated',
+  `position_mode`       VARCHAR(16)  NOT NULL DEFAULT 'oneway' COMMENT '持仓模式: oneway=单向/BOTH, hedge=双向/LONG|SHORT',
   `open_margin`         DECIMAL(16,2) NOT NULL DEFAULT 5.00 COMMENT '单笔开仓保证金(U)',
   `leverage`            INT          NOT NULL DEFAULT 5 COMMENT '杠杆倍数',
   `exclude_large_cap`   TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '排除大盘币',

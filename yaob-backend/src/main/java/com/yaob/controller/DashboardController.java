@@ -44,6 +44,7 @@ public class DashboardController {
         vo.setLeverage(user.getLeverage());
         vo.setAutoTradeEnabled(user.getAutoTradeEnabled());
         vo.setMarginMode(user.getMarginMode());
+        vo.setPositionMode(user.getPositionMode());
         vo.setExcludeLargeCap(user.getExcludeLargeCap());
         vo.setHasApiKey(user.getBinanceApiKey() != null && !user.getBinanceApiKey().isBlank());
         vo.setIsVip(userService.isVip(user));
@@ -52,6 +53,8 @@ public class DashboardController {
         vo.setCandidatePool(rt.candidatePool);
         vo.setPositions(rt.positions);
         vo.setDailyPnl(rt.dailyPnl);
+        vo.setRealizedPnl(rt.realizedPnl);
+        vo.setUnrealizedPnl(rt.unrealizedPnl);
         vo.setCircuitBreaker(rt.circuitBreaker);
         return Result.success(vo);
     }

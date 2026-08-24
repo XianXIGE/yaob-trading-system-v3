@@ -35,10 +35,6 @@ public class BinanceFapiService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private String apiKey = "";
-    private String apiSecret = "";
-    private boolean dryRun = true;
-
     // Symbol metadata cache: symbol -> {stepSize, tickSize}
     private Map<String, Map<String, Double>> symbolMeta = new HashMap<>();
 
@@ -99,24 +95,14 @@ public class BinanceFapiService {
         return httpClient;
     }
 
-    public synchronized void setApiKeys(String key, String secret) {
-        this.apiKey = key == null ? "" : key;
-        this.apiSecret = secret == null ? "" : secret;
-        this.dryRun = (apiKey.isBlank() || apiSecret.isBlank());
-    }
-
-    public synchronized boolean isDryRun() {
-        return dryRun;
-    }
-
     // ==================== Public Endpoints ====================
 
     public JsonNode ping() throws IOException, InterruptedException {
-        return _get("/fapi/v1/ping", null, false);
+        return _get("/fapi/v1/ping", null, false, null, null);
     }
 
     public JsonNode exchangeInfo() throws IOException, InterruptedException {
-        JsonNode resp = _get("/fapi/v1/exchangeInfo", null, false);
+        JsonNode resp = _get("/fapi/v1/exchangeInfo", null, false, null, null);
         symbolMeta.clear();
         if (resp.has("symbols")) {
             for (JsonNode s : resp.get("symbols")) {
@@ -158,7 +144,7 @@ public class BinanceFapiService {
         }
 
         // 缓存未命中，请求币安
-        JsonNode resp = _get("/fapi/v1/ticker/24hr", null, false);
+        JsonNode resp = _get("/fapi/v1/ticker/24hr", null, false, null, null);
         List<Map<String, Object>> tickers = new ArrayList<>();
         if (resp.isArray()) {
             for (JsonNode t : resp) {
@@ -195,7 +181,7 @@ public class BinanceFapiService {
         params.put("symbol", symbol);
         params.put("interval", interval);
         params.put("limit", String.valueOf(limit));
-        JsonNode data = _get("/fapi/v1/klines", params, false);
+        JsonNode data = _get("/fapi/v1/klines", params, false, null, null);
         if (data != null) {
             klinesCache.put(cacheKey, new Object[]{data, now});
         }
@@ -205,51 +191,65 @@ public class BinanceFapiService {
     public JsonNode fundingRate(String symbol) throws IOException, InterruptedException {
         Map<String, String> params = new LinkedHashMap<>();
         params.put("symbol", symbol);
-        return _get("/fapi/v1/premiumIndex", params, false);
+        return _get("/fapi/v1/premiumIndex", params, false, null, null);
     }
 
     // ==================== Signed Endpoints ====================
 
-    public synchronized JsonNode account() throws IOException, InterruptedException {
-        if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式(不实际下单)");
+    public JsonNode account(String apiKey, String apiSecret) throws IOException, InterruptedException {
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank())
+            throw new RuntimeException("未配置有效API Key, 处于模拟模式(不实际下单)");
         Map<String, String> params = new LinkedHashMap<>();
         params.put("recvWindow", "5000");
-        return _get("/fapi/v2/account", params, true);
+        return _get("/fapi/v2/account", params, true, apiKey, apiSecret);
     }
 
-    public synchronized JsonNode setLeverage(String symbol, int leverage) throws IOException, InterruptedException {
-        if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式");
+    public JsonNode setLeverage(String symbol, int leverage, String apiKey, String apiSecret) throws IOException, InterruptedException {
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank())
+            throw new RuntimeException("未配置有效API Key, 处于模拟模式");
         Map<String, String> params = new LinkedHashMap<>();
         params.put("symbol", symbol);
         params.put("leverage", String.valueOf(leverage));
-        return _post("/fapi/v1/leverage", params, true);
+        return _post("/fapi/v1/leverage", params, true, apiKey, apiSecret);
     }
 
-    public synchronized JsonNode newOrder(String symbol, String side, double qty) throws IOException, InterruptedException {
-        if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式");
+    public JsonNode newOrder(String symbol, String side, double qty, String positionSide, String apiKey, String apiSecret) throws IOException, InterruptedException {
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank())
+            throw new RuntimeException("未配置有效API Key, 处于模拟模式");
         String quantity = roundQty(symbol, qty, "down");
         Map<String, String> params = new LinkedHashMap<>();
         params.put("symbol", symbol);
         params.put("side", side);
         params.put("type", "MARKET");
         params.put("quantity", quantity);
-        params.put("reduceOnly", "false");
-        return _post("/fapi/v1/order", params, true);
+        // 开仓绝不能带 reduceOnly：币安在双向持仓模式下会对 reduceOnly=false 报 -1106 (Parameter 'reduceonly' sent when not required)
+        // 双向持仓模式(Hedge)必须传 positionSide; 单向(One-way)传 BOTH
+        params.put("positionSide", positionSide != null ? positionSide : "BOTH");
+        return _post("/fapi/v1/order", params, true, apiKey, apiSecret);
     }
 
     /**
-     * 平仓: reduceOnly=true, 数量向上取整(ceil)到stepSize, 确保清仓彻底不残留碎单
+     * 平仓: 数量向上取整(ceil)到stepSize, 确保清仓彻底不残留碎单
+     * Hedge模式靠 positionSide 定位持仓, 不需要 reduceOnly (币安会报 -1106);
+     * Oneway模式靠 reduceOnly=true 标记平仓方向
      */
-    public synchronized JsonNode closePosition(String symbol, double qty, String side) throws IOException, InterruptedException {
-        if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式");
+    public JsonNode closePosition(String symbol, double qty, String side, String positionSide, String apiKey, String apiSecret) throws IOException, InterruptedException {
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank())
+            throw new RuntimeException("未配置有效API Key, 处于模拟模式");
         String quantity = roundQty(symbol, qty, "up");
         Map<String, String> params = new LinkedHashMap<>();
         params.put("symbol", symbol);
         params.put("side", side);
         params.put("type", "MARKET");
         params.put("quantity", quantity);
-        params.put("reduceOnly", "true");
-        return _post("/fapi/v1/order", params, true);
+        // Hedge模式: positionSide=LONG/SHORT, 不传 reduceOnly (币安会报错 -1106)
+        // Oneway模式: positionSide=BOTH, 需要 reduceOnly=true 标记平仓
+        boolean isHedge = "LONG".equals(positionSide) || "SHORT".equals(positionSide);
+        if (!isHedge) {
+            params.put("reduceOnly", "true");
+        }
+        params.put("positionSide", positionSide != null ? positionSide : "BOTH");
+        return _post("/fapi/v1/order", params, true, apiKey, apiSecret);
     }
 
     // ==================== Qty Rounding ====================
@@ -284,8 +284,8 @@ public class BinanceFapiService {
 
     // ==================== HTTP + Signing ====================
 
-    private JsonNode _get(String path, Map<String, String> params, boolean signed) throws IOException, InterruptedException {
-        String query = buildQuery(params, signed);
+    private JsonNode _get(String path, Map<String, String> params, boolean signed, String apiKey, String apiSecret) throws IOException, InterruptedException {
+        String query = buildQuery(params, signed, apiKey, apiSecret);
         String url = base + path + (query.isEmpty() ? "" : "?" + query);
         HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -299,8 +299,8 @@ public class BinanceFapiService {
         return handleResponse(response);
     }
 
-    private JsonNode _post(String path, Map<String, String> params, boolean signed) throws IOException, InterruptedException {
-        String query = buildQuery(params, signed);
+    private JsonNode _post(String path, Map<String, String> params, boolean signed, String apiKey, String apiSecret) throws IOException, InterruptedException {
+        String query = buildQuery(params, signed, apiKey, apiSecret);
         String url = base + path + (query.isEmpty() ? "" : "?" + query);
         HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -315,7 +315,7 @@ public class BinanceFapiService {
         return handleResponse(response);
     }
 
-    private synchronized String buildQuery(Map<String, String> params, boolean signed) {
+    private String buildQuery(Map<String, String> params, boolean signed, String apiKey, String apiSecret) {
         StringBuilder sb = new StringBuilder();
         if (params != null) {
             for (Map.Entry<String, String> e : params.entrySet()) {
@@ -324,7 +324,8 @@ public class BinanceFapiService {
             }
         }
         if (signed) {
-            if (dryRun) throw new RuntimeException("未配置有效API Key, 处于模拟模式(不实际下单)");
+            if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank())
+                throw new RuntimeException("未配置有效API Key, 处于模拟模式(不实际下单)");
             if (sb.length() > 0) sb.append("&");
             sb.append("timestamp=").append(System.currentTimeMillis());
             String sig = hmacSha256(sb.toString(), apiSecret);

@@ -8,10 +8,13 @@ import com.yaob.service.StatsService;
 import com.yaob.service.UserService;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+
+@Slf4j
 
 @RestController
 @RequestMapping("/api")
@@ -41,6 +44,22 @@ public class PositionController {
         if (user == null) throw new BusinessException(401, "未登录");
         var stats = statsService.getStrategyStats(user.getId());
         return Result.success(Map.of("strategy_stats", stats));
+    }
+
+    @PostMapping("/close_position")
+    public Result<String> closePosition(@RequestBody Map<String, Object> body, HttpSession session) {
+        User user = userService.getCurrentUser(session);
+        if (user == null) throw new BusinessException(401, "未登录");
+
+        Object symbolObj = body.get("symbol");
+        if (symbolObj == null || symbolObj.toString().isBlank()) {
+            throw new BusinessException("缺少交易对参数 symbol");
+        }
+        String symbol = symbolObj.toString().trim().toUpperCase();
+        log.info("[close_position] userId={} 请求平仓 symbol=({}) len={}", user.getId(), symbol, symbol.length());
+
+        positionService.closePositionBySymbol(user.getId(), symbol);
+        return Result.success(symbol + " 平仓成功");
     }
 
     @GetMapping("/trade_profit_stats")

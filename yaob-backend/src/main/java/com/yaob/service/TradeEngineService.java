@@ -46,6 +46,19 @@ public class TradeEngineService {
     // 运行时状态: userId -> runtime
     private final Map<Long, RuntimeState> runtimeMap = new ConcurrentHashMap<>();
 
+    /** 解密并返回指定用户的币安 API 密钥对（无密钥返回 null 表示模拟模式） */
+    private String[] apiKeysOf(User user) {
+        if (user == null || user.getBinanceApiKey() == null || user.getBinanceApiKey().isBlank()) return null;
+        try {
+            String apiKey = cryptoUtil.decrypt(user.getBinanceApiKey());
+            String apiSecret = cryptoUtil.decrypt(user.getBinanceApiSecret());
+            if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank()) return null;
+            return new String[]{apiKey, apiSecret};
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // BTC趋势缓存: {timestamp, aboveMA20} —— 每次扫描刷新一次
     private volatile boolean btcAboveMA20 = true;
     private volatile long btcTrendTs = 0;
@@ -88,6 +101,8 @@ public class TradeEngineService {
         public List<Map<String, Object>> candidatePool = new ArrayList<>();
         public List<Map<String, Object>> positions = new ArrayList<>();
         public double dailyPnl = 0;
+        public double realizedPnl = 0;
+        public double unrealizedPnl = 0;
         public boolean circuitBreaker = false;
     }
 
@@ -117,8 +132,9 @@ public class TradeEngineService {
                 for (User user : traders) {
                     if (user.getBinanceApiKey() == null || user.getBinanceApiKey().isBlank()) continue;
                     try {
-                        fapi.setApiKeys(cryptoUtil.decrypt(user.getBinanceApiKey()), cryptoUtil.decrypt(user.getBinanceApiSecret()));
-                        if (!fapi.isDryRun()) {
+                        String apiKey = cryptoUtil.decrypt(user.getBinanceApiKey());
+                        String apiSecret = cryptoUtil.decrypt(user.getBinanceApiSecret());
+                        if (apiKey != null && !apiKey.isBlank() && apiSecret != null && !apiSecret.isBlank()) {
                             RuntimeState rt = getRuntime(user.getId());
                             updateAccountAndPositions(rt, user);
                         }
@@ -203,9 +219,10 @@ public class TradeEngineService {
         long startTime = System.currentTimeMillis();
 
         try {
-            // 设置 API keys (可能为空，不影响公开行情接口)
-            fapi.setApiKeys(user.getBinanceApiKey() != null ? cryptoUtil.decrypt(user.getBinanceApiKey()) : "",
-                    user.getBinanceApiSecret() != null ? cryptoUtil.decrypt(user.getBinanceApiSecret()) : "");
+            // 解密当前用户 API 密钥（可能为空，不影响公开行情接口）
+            String apiKey = user.getBinanceApiKey() != null ? cryptoUtil.decrypt(user.getBinanceApiKey()) : "";
+            String apiSecret = user.getBinanceApiSecret() != null ? cryptoUtil.decrypt(user.getBinanceApiSecret()) : "";
+            boolean hasKey = apiKey != null && !apiKey.isBlank() && apiSecret != null && !apiSecret.isBlank();
 
             // 获取 24h ticker 全市场数据
             log.info("[scan:{}] 开始获取币安行情...", user.getUsername());
@@ -220,7 +237,7 @@ public class TradeEngineService {
             log.info("[scan:{}] 获取到 {} 个交易对行情", user.getUsername(), tickers.size());
 
             // 先更新账户资产和持仓（不用等候选池跑完）
-            if (!fapi.isDryRun()) {
+            if (hasKey) {
                 updateAccountAndPositions(rt, user);
             }
 
@@ -229,7 +246,7 @@ public class TradeEngineService {
             rt.candidatePool = pool;
 
             // 更新当日盈亏和熔断状态
-            double dailyLoss = getDailyLoss(userId);
+            double dailyLoss = getDailyLoss(user, rt);
             rt.dailyPnl = dailyLoss;
             double totalAssets = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
             rt.circuitBreaker = totalAssets > 0 && dailyLoss <= -(totalAssets * 0.02);
@@ -237,7 +254,7 @@ public class TradeEngineService {
             // 自动交易
             if (Boolean.TRUE.equals(user.getAutoTradeEnabled())
                     && user.getBinanceApiKey() != null && !user.getBinanceApiKey().isBlank()
-                    && !fapi.isDryRun()) {
+                    && hasKey) {
 
                 // 自动平仓引擎
                 autoClosePositions(user, tickers, params);
@@ -346,7 +363,16 @@ public class TradeEngineService {
                     if (sig != null) {
                         sig.put("symbol", normSymbol(sym));
                         sig.put("current_price", getDouble(tick, "lastPrice"));
-                        sig.put("priority", getDouble(tick, "priceChangePercent") / 100.0);
+                        double pr = getDouble(tick, "priceChangePercent") / 100.0;
+                        // 大盘降权: BTC强势时做空信号降权, BTC弱势时做多信号降权(顺大盘优先)
+                        String dir = (String) sig.get("direction");
+                        boolean btcBull = isBtcBullish();
+                        if ("SHORT".equals(dir) && btcBull) {
+                            pr *= 0.5;   // BTC强势 -> 做空降权
+                        } else if ("LONG".equals(dir) && !btcBull) {
+                            pr *= 0.5;   // BTC弱势 -> 做多降权
+                        }
+                        sig.put("priority", pr);
                         sig.put("trigger_time", LocalDateTime.now().toString());
                         sig.put("unopen_reason", "等待开仓");
                         localSig.add(sig);
@@ -809,11 +835,15 @@ public class TradeEngineService {
         Long userId = user.getId();
         List<OpenPosition> openPositions = openPositionMapper.findOpenByUserId(userId);
         if (openPositions.isEmpty()) return;
+        String[] keys = apiKeysOf(user);
+        if (keys == null) return;
 
         // 获取实时持仓
         Map<String, JsonNode> livePositions = new HashMap<>();
+        boolean accountOk = false;
         try {
-            JsonNode acct = fapi.account();
+            JsonNode acct = fapi.account(keys[0], keys[1]);
+            accountOk = true;
             JsonNode positionsNode = acct.get("positions");
             if (positionsNode != null && positionsNode.isArray()) {
                 for (JsonNode p : positionsNode) {
@@ -824,8 +854,11 @@ public class TradeEngineService {
                 }
             }
         } catch (Exception e) {
-            log.warn("[auto-close:{}] 获取持仓失败: {}", user.getUsername(), e.getMessage());
+            log.warn("[auto-close:{}] 获取持仓失败, 跳过本轮平仓判断: {}", user.getUsername(), e.getMessage());
         }
+
+        // account 拉取失败时绝对不能误判仓位状态，直接跳过本轮
+        if (!accountOk) return;
 
         for (OpenPosition pos : openPositions) {
             String sym0 = pos.getSymbol();
@@ -887,6 +920,8 @@ public class TradeEngineService {
             if (qty <= 0) continue;
 
             String side = amt > 0 ? "SELL" : "BUY";
+            // 双向持仓模式(Hedge): 平仓必须带对应的 positionSide (LONG/SHORT); 单向传 BOTH
+            String positionSide = isHedge(user) ? ("LONG".equalsIgnoreCase(pos.getDirection()) ? "LONG" : "SHORT") : "BOTH";
 
             // 触发止盈或止损
             boolean shouldClose = false;
@@ -913,14 +948,14 @@ public class TradeEngineService {
 
             if (shouldClose) {
                 try {
-                    fapi.closePosition(sym0, qty, side);
+                    fapi.closePosition(sym0, qty, side, positionSide, keys[0], keys[1]);
                     log.info("[auto-close:{}] {} 已平 {} ({})", user.getUsername(), sym0, qty, side);
                     
                     // 部分成交处理：平仓后重新查询实际持仓，判断是否完全平仓
                     boolean fullyClosed = true;
                     double remainingQty = 0;
                     try {
-                        JsonNode acctAfter = fapi.account();
+                        JsonNode acctAfter = fapi.account(keys[0], keys[1]);
                         JsonNode posAfter = acctAfter.get("positions");
                         if (posAfter != null && posAfter.isArray()) {
                             for (JsonNode p : posAfter) {
@@ -988,7 +1023,7 @@ public class TradeEngineService {
         updateStrategyStats(userId, pos.getStrategy(), reason, pnl);
     }
 
-    private void updateStrategyStats(Long userId, String strategy, String reason, BigDecimal pnl) {
+    public void updateStrategyStats(Long userId, String strategy, String reason, BigDecimal pnl) {
         StrategyStat stat = strategyStatMapper.findByUserIdAndStrategy(userId, strategy);
         if (stat == null) {
             stat = new StrategyStat();
@@ -1017,23 +1052,51 @@ public class TradeEngineService {
 
     // ==================== Auto Open Positions ====================
 
-    private double getDailyLoss(Long userId) {
+    private double getDailyLoss(User user, RuntimeState rt) {
+        Long userId = user.getId();
+        double realized = 0;
         try {
             LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
             List<TradeHistory> histories = tradeHistoryMapper.findAllByUserIdOrderByOpenedAtDesc(userId);
-            double dailyPnl = 0;
             for (TradeHistory th : histories) {
                 if (th.getClosedAt() != null && th.getClosedAt().isAfter(todayStart)) {
                     if (th.getPnl() != null) {
-                        dailyPnl += th.getPnl().doubleValue();
+                        realized += th.getPnl().doubleValue();
                     }
                 }
             }
-            return dailyPnl;
         } catch (Exception e) {
-            log.warn("查询当日亏损失败: {}", e.getMessage());
-            return 0;
+            log.warn("查询当日已实现亏损失败: {}", e.getMessage());
         }
+        // 当前实盘持仓的浮动盈亏（unrealizedProfit）
+        double unrealized = 0;
+        try {
+            String[] keys = apiKeysOf(user);
+            if (keys != null) {
+                JsonNode acct = fapi.account(keys[0], keys[1]);
+                if (acct != null && acct.has("positions") && acct.get("positions").isArray()) {
+                    for (JsonNode p : acct.get("positions")) {
+                        double amt = p.has("positionAmt") ? p.get("positionAmt").asDouble() : 0;
+                        if (amt == 0) continue;
+                        double upnl = p.has("unrealizedProfit") && !p.get("unrealizedProfit").isNull()
+                                ? p.get("unrealizedProfit").asDouble() : 0;
+                        unrealized += upnl;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("查询当日浮动盈亏失败: {}", e.getMessage());
+        }
+        if (rt != null) {
+            rt.realizedPnl = realized;
+            rt.unrealizedPnl = unrealized;
+        }
+        return realized + unrealized;
+    }
+
+    // 是否双向持仓模式(Hedge): 用户 positionMode=hedge 时启用 LONG/SHORT 方向单
+    private boolean isHedge(User user) {
+        return user != null && "hedge".equalsIgnoreCase(user.getPositionMode());
     }
 
     @SuppressWarnings("unchecked")
@@ -1042,9 +1105,11 @@ public class TradeEngineService {
                                     Map<String, Map<String, Object>> params,
                                     Map<String, Boolean> states) {
         Long userId = user.getId();
+        String[] keys = apiKeysOf(user);
+        if (keys == null) return;
 
         // 单日亏损熔断检查
-        double dailyLoss = getDailyLoss(userId);
+        double dailyLoss = getDailyLoss(user, rt);
         double totalAssets = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
         double maxDailyLoss = totalAssets * 0.02; // 2% 熔断
         if (totalAssets > 0 && dailyLoss <= -maxDailyLoss) {
@@ -1058,8 +1123,10 @@ public class TradeEngineService {
 
         // 当前持仓币种集合
         Set<String> held = new HashSet<>();
+        boolean accountOk2 = false;
         try {
-            JsonNode acct = fapi.account();
+            JsonNode acct = fapi.account(keys[0], keys[1]);
+            accountOk2 = true;
             JsonNode positionsNode = acct.get("positions");
             if (positionsNode != null && positionsNode.isArray()) {
                 for (JsonNode p : positionsNode) {
@@ -1069,7 +1136,15 @@ public class TradeEngineService {
                 }
             }
         } catch (Exception e) {
-            // 拿不到持仓不阻断
+            // account 拉取失败时不阻断开仓，但 held 为空可能导致重复开仓
+            // 补充：从数据库 open_positions 获取已持仓币种作为兜底
+            log.warn("[auto-trade:{}] 获取实盘持仓失败, 从数据库补全: {}", user.getUsername(), e.getMessage());
+        }
+        // account 拉取失败时从数据库补全已持仓币种，防止重复开仓
+        if (!accountOk2) {
+            for (OpenPosition op : openPositionMapper.findOpenByUserId(userId)) {
+                held.add(op.getSymbol());
+            }
         }
 
         double avail = rt.availableMargin != null ? rt.availableMargin.doubleValue() : 0;
@@ -1094,8 +1169,7 @@ public class TradeEngineService {
                 continue;
             }
 
-            String side = "SHORT".equals(cand.get("direction")) ? "SELL" : "BUY";
-            double price = getDouble(cand, "current_price");
+            String side = "SHORT".equals(cand.get("direction")) ? "SELL" : "BUY";            double price = getDouble(cand, "current_price");
             double qty = price > 0 ? openMargin * leverage / price : 0;
             if (qty <= 0) continue;
 
@@ -1115,8 +1189,10 @@ public class TradeEngineService {
                     // 获取费率失败不阻断
                 }
 
-                fapi.setLeverage(sym0, leverage);
-                JsonNode orderResult = fapi.newOrder(sym0, side, qty);
+                fapi.setLeverage(sym0, leverage, keys[0], keys[1]);
+                // 双向持仓模式(Hedge): 开仓必须带对应的 positionSide (LONG/SHORT); 单向传 BOTH
+                String posSide = isHedge(user) ? ("SHORT".equals(cand.get("direction")) ? "SHORT" : "LONG") : "BOTH";
+                JsonNode orderResult = fapi.newOrder(sym0, side, qty, posSide, keys[0], keys[1]);
                 // 尝试从订单响应获取实际成交价
                 double actualPrice = price;
                 if (orderResult != null && orderResult.has("avgPrice")) {
@@ -1165,8 +1241,10 @@ public class TradeEngineService {
 
     @SuppressWarnings("unchecked")
     private void updateAccountAndPositions(RuntimeState rt, User user) {
+        String[] keys = apiKeysOf(user);
+        if (keys == null) return;
         try {
-            JsonNode acct = fapi.account();
+            JsonNode acct = fapi.account(keys[0], keys[1]);
             rt.accountTotalAssets = new BigDecimal(acct.get("totalMarginBalance").asText());
             rt.availableMargin = new BigDecimal(acct.get("availableBalance").asText());
 

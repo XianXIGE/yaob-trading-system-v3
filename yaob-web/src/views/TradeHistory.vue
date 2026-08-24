@@ -8,7 +8,7 @@
     <div class="yaob-card">
       <div class="filter-row">
         <el-select v-model="filter.strategy" placeholder="策略" clearable size="small" style="width: 100px;">
-          <el-option v-for="s in ['A','B','C','D','E','F']" :key="s" :label="s" :value="s" />
+          <el-option v-for="s in ['A','B','C','D','E','F','G']" :key="s" :label="s" :value="s" />
         </el-select>
         <el-select v-model="filter.direction" placeholder="方向" clearable size="small" style="width: 100px;">
           <el-option label="做空" value="SHORT" />

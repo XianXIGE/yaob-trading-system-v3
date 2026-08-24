@@ -27,3 +27,6 @@ nohup.out
 # Docker data
 mysql_data/
 redis_data/
+
+# 冗余构建文件（与 Dockerfile.simple 重复）
+yaob-backend/Dockerfile.fast

@@ -72,6 +72,18 @@ public class TradeController {
         return Result.success(data);
     }
 
+    @PostMapping("/toggle_position_mode")
+    public Result<Map<String, Object>> togglePositionMode(HttpSession session) {
+        User user = userService.getCurrentUser(session);
+        if (user == null) throw new BusinessException(401, "未登录");
+        userService.checkVip(user);
+        userService.togglePositionMode(user.getId());
+        user = userService.findById(user.getId());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("position_mode", user.getPositionMode());
+        return Result.success(data);
+    }
+
     @PostMapping("/toggle_exclude_large_cap")
     public Result<Map<String, Object>> toggleExcludeLargeCap(HttpSession session) {
         User user = userService.getCurrentUser(session);
