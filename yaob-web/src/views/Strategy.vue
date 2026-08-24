@@ -120,6 +120,7 @@ const builtinDesc: Record<string, { type: string; description: string }> = {
   d: { type: 'short', description: '做空 - 短时急涨做空，分钟级急涨做空' },
   e: { type: 'long', description: '强趋势回踩：30天涨幅>100%，EMA50上方，回撤20%-40%至0.618 Fib' },
   f: { type: 'fibonacci', description: '1小时斐波那契位置，15分钟确认入场' },
+  g: { type: 'multi', description: '日内多空三重过滤：1h EMA20/60趋势+量比+RSI，6子信号(关注做多/回调做多/超跌反弹/关注做空/反弹做空/冲高回落做空)，4h同向评级A/B' },
 }
 
 // 自定义策略描述存储
@@ -188,6 +189,16 @@ const paramDefs: Record<string, { label: string; field: string; step?: number; m
     { label: '斐波那契做多', field: 'fib_long', step: 0.001 },
     { label: '斐波那契做空', field: 'fib_short', step: 0.001 },
     { label: '触及容差', field: 'tolerance_ratio', step: 0.1, min: 0, unit: '%' },
+    { label: '24h成交额下限', field: 'vol_min', step: 1000000, min: 0, unit: 'USDT' },
+    { label: '止盈比例', field: 'tp_ratio', step: 1, min: 0, unit: '%' },
+    { label: '止损比例', field: 'sl_ratio', step: 1, unit: '%' },
+  ],
+  g: [
+    { label: '短EMA周期', field: 'ema_short', step: 1, min: 1, unit: '根' },
+    { label: '长EMA周期', field: 'ema_long', step: 1, min: 1, unit: '根' },
+    { label: '顺势最低量比', field: 'vol_ratio_min', step: 0.1, min: 1, unit: '倍' },
+    { label: '超跌RSI阈值', field: 'rsi_oversold', step: 1, min: 0, max: 100, unit: '' },
+    { label: '上影/实体比', field: 'wick_body_ratio', step: 0.1, min: 0, unit: '倍' },
     { label: '24h成交额下限', field: 'vol_min', step: 1000000, min: 0, unit: 'USDT' },
     { label: '止盈比例', field: 'tp_ratio', step: 1, min: 0, unit: '%' },
     { label: '止损比例', field: 'sl_ratio', step: 1, unit: '%' },

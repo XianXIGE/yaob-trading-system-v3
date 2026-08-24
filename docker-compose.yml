@@ -50,7 +50,7 @@ services:
 
   # ===================== Java 后端 =====================
   backend:
-    image: yaob-backend:3.0.1
+    image: yaob-backend:3.1.1
     container_name: yaob-backend
     restart: always
     depends_on:
@@ -92,7 +92,11 @@ services:
 
 volumes:
   mysql_data:
+    external: true
+    name: yaob-trading-system-v3_mysql_data
   redis_data:
+    external: true
+    name: yaob-trading-system-v3_redis_data
 
 networks:
   yaob-net:

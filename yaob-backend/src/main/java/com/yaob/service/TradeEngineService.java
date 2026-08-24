@@ -15,6 +15,8 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 @Service
@@ -98,6 +100,7 @@ public class TradeEngineService {
         STAT.put("D", "空");
         STAT.put("E", "多");
         STAT.put("F", "斐波那契双向");
+        STAT.put("G", "日内多空三重过滤");
     }
 
     public RuntimeState getRuntime(Long userId) {
@@ -277,52 +280,92 @@ public class TradeEngineService {
         if (minVol == Double.MAX_VALUE) minVol = 0;
 
         int count = 0;
+        // 候选币暂存（并发），按 symbol -> sig 收集
+        List<Map<String, Object>> concurrentPool = new java.util.concurrent.CopyOnWriteArrayList<>();
+        // 固定线程池并发拉K线/检测，大幅降低扫描耗时（主因：D/E/F/G 逐币串行请求币安K线）
+        // 币安/代理吞吐有限，但 32-48 并发能显著压缩冷启动全量扫描时间
+        int threads = Math.min(48, Math.max(16, Runtime.getRuntime().availableProcessors()));
+        ExecutorService detectPool = Executors.newFixedThreadPool(threads);
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+        try {
         for (Map.Entry<String, Map<String, Object>> entry : tickers.entrySet()) {
             if (count++ > 600) break;
-            String sym = entry.getKey();
-            Map<String, Object> tick = entry.getValue();
+            final String sym = entry.getKey();
+            final Map<String, Object> tick = entry.getValue();
 
+            // 快速 tiker 过滤（无网络请求）放主线程预判，不合格的直接跳过不提交任务
             if (!sym.endsWith("USDT")) continue;
+            if (Boolean.TRUE.equals(user.getExcludeLargeCap()) && excluded.contains(sym)) continue;
+            double qv0 = getDouble(tick, "quoteVolume");
+            if (qv0 == 0 || qv0 < minVol) continue;
 
-            // 排除大盘币
-            if (Boolean.TRUE.equals(user.getExcludeLargeCap()) && excluded.contains(sym)) {
-                continue;
+            boolean needsKlines0 = false;
+            for (String sk : new String[]{"D", "E", "F", "G"}) {
+                if (Boolean.TRUE.equals(states.get(sk))) { needsKlines0 = true; break; }
+            }
+            if (needsKlines0) {
+                double klineVolMin0 = Double.MAX_VALUE;
+                boolean hasG = false;
+                for (String sk : new String[]{"D", "E", "F", "G"}) {
+                    if (!Boolean.TRUE.equals(states.get(sk))) continue;
+                    if ("G".equals(sk)) hasG = true;
+                    Map<String, Object> pp = params.get(sk);
+                    if (pp == null) continue;
+                    Object v = pp.get("vol_min");
+                    double vv = v instanceof Number ? ((Number) v).doubleValue() : 1e7;
+                    if (vv < klineVolMin0) klineVolMin0 = vv;
+                }
+                double priceChange = getDouble(tick, "priceChangePercent");
+                // G 策略(日内三罉过滤)只对有明显趋势/波动的币有价值：
+                // 完全横盘的币拉K线也是浪费。启用 G 时要求 24h 涨跌幅更明显，避免滤死大部分币又保证不拉废请求。
+                double minActivity = hasG ? 0.3 : 0.1;
+                if (qv0 < klineVolMin0 || Math.abs(priceChange) < minActivity) continue;
             }
 
-            double qv = getDouble(tick, "quoteVolume");
-            if (qv == 0 || qv < minVol) continue;
-
-            // 逐策略检测
-            for (String sk : new String[]{"A", "B", "C", "D", "E", "F"}) {
-                if (!Boolean.TRUE.equals(states.get(sk))) continue;
-                Map<String, Object> p = params.get(sk);
-                if (p == null) continue;
-
-                Map<String, Object> sig = null;
-                try {
-                    switch (sk) {
-                        case "A": sig = checkA(tick, p); break;
-                        case "B": sig = checkB(tick, p); break;
-                        case "C": sig = checkC(tick, p); break;
-                        case "D": sig = checkD(sym, tick, p); break;
-                        case "E": sig = checkE(sym, tick, p); break;
-                        case "F": sig = checkF(sym, tick, p); break;
+            // 提交并行检测任务（每币独立，无共享可变状态）
+            futures.add(detectPool.submit(() -> {
+                List<Map<String, Object>> localSig = new ArrayList<>();
+                for (String sk : new String[]{"A", "B", "C", "D", "E", "F", "G"}) {
+                    if (!Boolean.TRUE.equals(states.get(sk))) continue;
+                    Map<String, Object> p = params.get(sk);
+                    if (p == null) continue;
+                    Map<String, Object> sig = null;
+                    try {
+                        switch (sk) {
+                            case "A": sig = checkA(tick, p); break;
+                            case "B": sig = checkB(tick, p); break;
+                            case "C": sig = checkC(tick, p); break;
+                            case "D": sig = checkD(sym, tick, p); break;
+                            case "E": sig = checkE(sym, tick, p); break;
+                            case "F": sig = checkF(sym, tick, p); break;
+                            case "G": sig = checkG(sym, tick, p); break;
+                        }
+                    } catch (Exception e) {
+                        // skip
                     }
-                } catch (Exception e) {
-                    // skip
+                    if (sig != null) {
+                        sig.put("symbol", normSymbol(sym));
+                        sig.put("current_price", getDouble(tick, "lastPrice"));
+                        sig.put("priority", getDouble(tick, "priceChangePercent") / 100.0);
+                        sig.put("trigger_time", LocalDateTime.now().toString());
+                        sig.put("unopen_reason", "等待开仓");
+                        localSig.add(sig);
+                        break; // 每币取一个信号
+                    }
                 }
-
-                if (sig != null) {
-                    sig.put("symbol", normSymbol(sym));
-                    sig.put("current_price", getDouble(tick, "lastPrice"));
-                    sig.put("priority", getDouble(tick, "priceChangePercent") / 100.0);
-                    sig.put("trigger_time", LocalDateTime.now().toString());
-                    sig.put("unopen_reason", "等待开仓");
-                    pool.add(sig);
-                    break; // 每币取一个信号
+                if (!localSig.isEmpty()) {
+                    concurrentPool.addAll(localSig);
                 }
-            }
+            }));
         }
+        // 等待所有检测完成
+        for (java.util.concurrent.Future<?> f : futures) {
+            try { f.get(); } catch (Exception e) { /* 单任务失败不影响整体 */ }
+        }
+        } finally {
+            detectPool.shutdownNow();
+        }
+        pool.addAll(concurrentPool);
 
         // 排序: SHORT在前, LONG在后, 组内按 priority 降序
         List<Map<String, Object>> shorts = new ArrayList<>();
@@ -565,7 +608,199 @@ public class TradeEngineService {
         return null;
     }
 
-    // ==================== Auto Close Positions ====================
+    // ==================== Strategy G: 日内多空三重过滤 (趋势+量价+关键均线) ====================
+
+    private Map<String, Object> checkG(String sym, Map<String, Object> tick, Map<String, Object> p) {
+        // G: 三重过滤 -- 1h EMA20/EMA60排列(趋势) + 量比(量价) + EMA60为多空分水岭(关键均线)
+        // 6个子信号: 关注做多/回调做多/超跌反弹/关注做空/反弹做空/冲高回落做空
+        double volMin = getParamDouble(p, "vol_min");
+        int emaShort = (int) getParamDouble(p, "ema_short");   // 20
+        int emaLong = (int) getParamDouble(p, "ema_long");     // 60
+        double volRatioMin = getParamDouble(p, "vol_ratio_min"); // 1.3
+        double rsiOversold = getParamDouble(p, "rsi_oversold");  // 32
+        double wickBodyRatio = getParamDouble(p, "wick_body_ratio"); // 1.5
+        double cur = getDouble(tick, "lastPrice");
+        double qv = getDouble(tick, "quoteVolume");
+        if (qv < volMin) return null;
+
+        try {
+            JsonNode kl = fapi.klines(sym, "1h", 120);
+            if (kl == null || !kl.isArray() || kl.size() < emaLong + 10) return null;
+
+            // 收盘价数组
+            double[] closes = new double[kl.size()];
+            double[] opens = new double[kl.size()];
+            double[] highs = new double[kl.size()];
+            double[] lows = new double[kl.size()];
+            double[] vols = new double[kl.size()];
+            for (int i = 0; i < kl.size(); i++) {
+                closes[i] = kl.get(i).get(4).asDouble();
+                opens[i] = kl.get(i).get(1).asDouble();
+                highs[i] = kl.get(i).get(2).asDouble();
+                lows[i] = kl.get(i).get(3).asDouble();
+                vols[i] = kl.get(i).get(5).asDouble();
+            }
+
+            // EMA计算
+            double e20 = emaVal(closes, emaShort);
+            double e60 = emaVal(closes, emaLong);
+            double r = calcRSI(kl, 14);
+
+            // 量比: 最后一根1h量 vs 前20根均量
+            double avgVol = 0;
+            for (int i = kl.size() - 21; i < kl.size() - 1; i++) avgVol += vols[i];
+            avgVol /= 20;
+            double volRatio = avgVol > 0 ? vols[vols.length - 1] / avgVol : 1.0;
+
+            // ATR(14)
+            double atrSum = 0;
+            for (int i = kl.size() - 14; i < kl.size(); i++) {
+                double tr = Math.max(highs[i] - lows[i],
+                        Math.max(Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+                atrSum += tr;
+            }
+            double atr = atrSum / 14;
+
+            // 24h高低点
+            double hi24 = 0, lo24 = Double.MAX_VALUE;
+            for (int i = kl.size() - 24; i < kl.size(); i++) {
+                if (highs[i] > hi24) hi24 = highs[i];
+                if (lows[i] < lo24) lo24 = lows[i];
+            }
+
+            // 最近已收盘K线(倒数第二根, 最后一根可能未收盘)
+            int li = kl.size() - 2;
+            double lastClose = closes[li];
+            double lastOpen = opens[li];
+            double lastHigh = highs[li];
+            double lastLow = lows[li];
+            double lastVol = vols[li];
+            double prevAvgVol = 0;
+            for (int i = li - 20; i < li; i++) prevAvgVol += vols[i];
+            prevAvgVol /= 20;
+            double lastVolRatio = prevAvgVol > 0 ? lastVol / prevAvgVol : 1.0;
+
+            // 判断6种子信号(按优先级)
+            boolean bullish = e20 > e60 && cur > e60;
+            boolean bearish = e20 < e60 && cur < e60;
+            boolean isGreenBar = lastClose > lastOpen; // 阳线
+            boolean isRedBar = lastClose < lastOpen;   // 阴线
+
+            String subSignal = null;
+            String direction = null;
+            String defense = null;
+            String target = null;
+            String reason = null;
+
+            // A. 关注做多: close>EMA20>EMA60 + 放量(量比>=volRatioMin) + 阳线
+            if (cur > e20 && e20 > e60 && lastVolRatio >= volRatioMin && isGreenBar) {
+                subSignal = "关注做多";
+                direction = "LONG";
+                defense = String.format("EMA20 %.4g / EMA60 %.4g", e20, e60);
+                target = String.format("%.4g", hi24);
+                reason = String.format("顺势放量阳线(量比%.1f) 站上EMA20>EMA60", lastVolRatio);
+            }
+            // B. 回调做多: 趋势偏强(EMA20>EMA60) + 缩量回调至EMA20下方
+            else if (bullish && cur < e20 && lastVolRatio < 1.0) {
+                subSignal = "回调做多";
+                direction = "LONG";
+                defense = String.format("EMA60 %.4g", e60);
+                target = String.format("%.4g", hi24);
+                reason = String.format("趋势偏强+缩量回调(量比%.1f) 至EMA20下方", lastVolRatio);
+            }
+            // C. 超跌反弹: RSI<oversold + 转阳 + 深度偏离EMA60
+            else if (r < rsiOversold && isGreenBar && cur < e60 * 0.92) {
+                subSignal = "超跌反弹";
+                direction = "LONG";
+                defense = String.format("%.4g(再创新低无条件走)", lo24);
+                target = String.format("EMA60 %.4g", e60);
+                reason = String.format("RSI=%.0f 超跌转阳 偏离EMA60 %.1f%%", r, (cur / e60 - 1) * 100);
+            }
+            // D. 关注做空: close<EMA20<EMA60 + 放量(量比>=volRatioMin) + 阴线
+            else if (cur < e20 && e20 < e60 && lastVolRatio >= volRatioMin && isRedBar) {
+                subSignal = "关注做空";
+                direction = "SHORT";
+                defense = String.format("EMA20 %.4g / EMA60 %.4g", e20, e60);
+                target = String.format("%.4g", lo24);
+                reason = String.format("顺势放量阴线(量比%.1f) 站下EMA20<EMA60", lastVolRatio);
+            }
+            // E. 反弹做空: 趋势偏弱(EMA20<EMA60) + 反弹至EMA60附近被压回
+            else if (bearish && cur > e20 && cur < e60 * 1.01 && isRedBar) {
+                subSignal = "反弹做空";
+                direction = "SHORT";
+                defense = String.format("EMA60 %.4g 上方", e60);
+                target = String.format("%.4g", lo24);
+                reason = String.format("趋势偏弱+反弹至EMA60(%.4g)被压回", e60);
+            }
+            // F. 冲高回落做空: 放量(量比>=1.5) + 收阴 + 长上影(下影<实体的35%) + 此前上涨 + 振幅>2*ATR
+            else if (lastVolRatio >= 1.5 && isRedBar) {
+                double range = lastHigh - lastLow;
+                double lowerWick = Math.min(lastOpen, lastClose) - lastLow;
+                double body = Math.abs(lastClose - lastOpen);
+                boolean longUpperWick = (lastHigh - Math.max(lastOpen, lastClose)) > body;
+                // 前3根中有>=2根阳线(此前在涨)
+                int greenCount = 0;
+                for (int i = li - 3; i < li; i++) {
+                    if (closes[i] > opens[i]) greenCount++;
+                }
+                if (longUpperWick && range > 2 * atr && greenCount >= 2 &&
+                    lowerWick < body * 0.35) {
+                    subSignal = "冲高回落做空";
+                    direction = "SHORT";
+                    defense = String.format("今晨高点 %.4g", lastHigh);
+                    target = String.format("%.4g", lo24);
+                    reason = String.format("放量长上影(量比%.1f) 振幅%.4g>2ATR 此前%d连阳", lastVolRatio, range, greenCount);
+                }
+            }
+
+            if (subSignal == null) return null;
+
+            // 4h同向性评级
+            String grade = "B";
+            try {
+                JsonNode kl4 = fapi.klines(sym, "4h", 80);
+                if (kl4 != null && kl4.isArray() && kl4.size() >= 60) {
+                    double[] c4 = new double[kl4.size()];
+                    for (int i = 0; i < kl4.size(); i++) c4[i] = kl4.get(i).get(4).asDouble();
+                    double e204 = emaVal(c4, 20);
+                    double e604 = emaVal(c4, 60);
+                    boolean isLong = direction.equals("LONG");
+                    if ((isLong && e204 > e604) || (!isLong && e204 < e604)) {
+                        grade = "A";
+                    }
+                }
+            } catch (Exception e) {
+                // 4h获取失败, 默认B
+            }
+
+            Map<String, Object> sig = new LinkedHashMap<>();
+            sig.put("strategy", "G");
+            sig.put("direction", direction);
+            sig.put("reason", String.format("[%s] %s | %s | 防守:%s 目标:%s", grade, subSignal, reason, defense, target));
+            sig.put("threshold_ratio", getDouble(tick, "priceChangePercent") / 100.0);
+            return sig;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 计算EMA: 用前N根均值做种子, 逐根迭代 */
+    private static double emaVal(double[] closes, int period) {
+        if (closes.length < period) return closes[closes.length - 1];
+        double k = 2.0 / (period + 1);
+        double e = 0;
+        int start = closes.length - period;
+        for (int i = start; i < start + period && i < closes.length; i++) {
+            e = (e == 0) ? closes[i] : (closes[i] - e) * k + e;
+        }
+        // 继续迭代剩余K线
+        for (int i = start + period; i < closes.length; i++) {
+            e = (closes[i] - e) * k + e;
+        }
+        return e;
+    }
+
+    // ==================== Auto Close Positions =====================
 
     @Transactional
     @SuppressWarnings("unchecked")

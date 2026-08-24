@@ -179,12 +179,27 @@ public class BinanceFapiService {
         return tickers;
     }
 
+    // K线内存缓存: key=symbol:interval:limit, value=[json, ts]
+    private static final long KLINES_CACHE_TTL = 30_000; // 30秒
+    private final Map<String, Object[]> klinesCache = new java.util.concurrent.ConcurrentHashMap<>();
+
     public JsonNode klines(String symbol, String interval, int limit) throws IOException, InterruptedException {
+        String cacheKey = symbol + ":" + interval + ":" + limit;
+        long now = System.currentTimeMillis();
+        Object[] hit = klinesCache.get(cacheKey);
+        if (hit != null && (now - (Long) hit[1]) < KLINES_CACHE_TTL) {
+            return (JsonNode) hit[0];
+        }
+
         Map<String, String> params = new LinkedHashMap<>();
         params.put("symbol", symbol);
         params.put("interval", interval);
         params.put("limit", String.valueOf(limit));
-        return _get("/fapi/v1/klines", params, false);
+        JsonNode data = _get("/fapi/v1/klines", params, false);
+        if (data != null) {
+            klinesCache.put(cacheKey, new Object[]{data, now});
+        }
+        return data;
     }
 
     public JsonNode fundingRate(String symbol) throws IOException, InterruptedException {

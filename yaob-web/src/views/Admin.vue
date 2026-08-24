@@ -83,7 +83,9 @@ const vipLoading = ref(false)
 async function fetchUsers() {
   try {
     const res = await getUsers()
-    users.value = res.users || res || []
+    // 后端返回 {code, msg, data:{users:[...]}}，拦截器在code===200时返回整个res
+    const data = (res && res.data) ? res.data : res
+    users.value = data.users || data || []
   } catch { /* handled */ }
 }
 

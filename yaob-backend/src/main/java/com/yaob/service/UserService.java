@@ -104,6 +104,18 @@ public class UserService {
         f.put("tp_ratio", 120);
         f.put("sl_ratio", -20);
         DEFAULT_PARAMS.put("F", f);
+
+        // G: 日内多空三重过滤 (1h EMA20/60 + 量比 + RSI + ATR)
+        Map<String, Object> g = new LinkedHashMap<>();
+        g.put("ema_short", 20);       // 短EMA周期
+        g.put("ema_long", 60);        // 长EMA周期(多空分水岭)
+        g.put("vol_ratio_min", 1.3);  // 顺势信号最低量比
+        g.put("rsi_oversold", 32);   // 超跌反弹RSI阈值
+        g.put("wick_body_ratio", 1.5); // 冲高回落上影/实体比
+        g.put("vol_min", 1e7);        // 24h最低成交额
+        g.put("tp_ratio", 10);       // 止盈10%
+        g.put("sl_ratio", -5);        // 止损5%
+        DEFAULT_PARAMS.put("G", g);
     }
 
     // 默认策略启用状态: A=true, B=false, C=false, D=false, E=true, F=true
@@ -115,6 +127,7 @@ public class UserService {
         DEFAULT_STRATEGY_STATES.put("D", false);
         DEFAULT_STRATEGY_STATES.put("E", true);
         DEFAULT_STRATEGY_STATES.put("F", true);
+        DEFAULT_STRATEGY_STATES.put("G", false); // 默认关闭, 用户手动开启
     }
 
     // 默认大盘币列表
