@@ -173,3 +173,21 @@ VALUES
   (1,'F',1,120.00,-20.00,'{"lookback_hours":48,"fib_long":0.618,"fib_short":0.382,"tolerance_ratio":0.1,"vol_min":30000000,"tp_ratio":120,"sl_ratio":-20}','fibonacci','1小时斐波那契位置，15分钟确认入场'),
   (1,'G',0,10.00,-5.00,'{"ema_short":20,"ema_long":60,"vol_ratio_min":1.3,"rsi_oversold":32,"wick_body_ratio":1.5,"vol_min":10000000,"tp_ratio":10,"sl_ratio":-5}','multi','日内多空三重过滤：1h EMA20/60趋势+量比+RSI')
 ON DUPLICATE KEY UPDATE `enabled`=VALUES(`enabled`), `tp_ratio`=VALUES(`tp_ratio`), `sl_ratio`=VALUES(`sl_ratio`), `params_json`=VALUES(`params_json`), `strategy_type`=VALUES(`strategy_type`), `description`=VALUES(`description`);
+
+-- -------------------------------------------------------
+-- 管理后台操作日志（管理员敏感操作审计）
+-- 记录：授权/撤销 VIP、删除用户、查看用户详情等管理权限操作
+-- -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `operations_log` (
+  `id`         BIGINT       NOT NULL AUTO_INCREMENT,
+  `operator_id` BIGINT      NOT NULL COMMENT '操作者用户ID(管理员)',
+  `operator`   VARCHAR(64)  NOT NULL COMMENT '操作者用户名',
+  `action`     VARCHAR(64)  NOT NULL COMMENT '操作类型',
+  `target_username` VARCHAR(64) DEFAULT NULL COMMENT '被操作的用户(可为空)',
+  `detail`     VARCHAR(512) DEFAULT NULL COMMENT '操作详情',
+  `ip`         VARCHAR(64)  DEFAULT NULL COMMENT '来源IP',
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_op_operator` (`operator_id`),
+  KEY `idx_op_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理后台操作日志';

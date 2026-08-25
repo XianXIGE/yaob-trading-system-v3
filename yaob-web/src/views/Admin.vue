@@ -16,8 +16,9 @@
         </el-table-column>
         <el-table-column prop="vip_expiry" label="VIP到期" width="180" />
         <el-table-column prop="created_at" label="注册时间" width="180" />
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
+            <el-button size="small" type="success" plain @click="openDetail(row)">详情</el-button>
             <el-button size="small" type="primary" plain @click="openVipDialog(row)">授权VIP</el-button>
             <el-button size="small" type="warning" plain @click="handleRevokeVip(row)" :disabled="!row.is_vip">撤销VIP</el-button>
             <el-button size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
@@ -35,7 +36,8 @@
           </div>
           <div class="card-row" v-if="u.vip_expiry"><span class="label">VIP到期</span><span style="font-size:12px">{{ u.vip_expiry }}</span></div>
           <div class="card-row"><span class="label">注册</span><span style="font-size:12px">{{ u.created_at }}</span></div>
-          <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+          <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;">
+            <el-button size="small" type="success" plain @click="openDetail(u)">详情</el-button>
             <el-button size="small" type="primary" plain @click="openVipDialog(u)">授权VIP</el-button>
             <el-button size="small" type="warning" plain @click="handleRevokeVip(u)" :disabled="!u.is_vip">撤销VIP</el-button>
             <el-button size="small" type="danger" plain @click="handleDelete(u)">删除</el-button>
@@ -64,10 +66,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, setVip, deleteUser } from '@/api/admin'
 
+const router = useRouter()
+
 interface UserItem {
+  id?: number
   username: string
   is_vip: boolean
   vip_expiry: string | null
@@ -87,6 +93,14 @@ async function fetchUsers() {
     const data = (res && res.data) ? res.data : res
     users.value = data.users || data || []
   } catch { /* handled */ }
+}
+
+function openDetail(user: UserItem) {
+  if (user.id != null) {
+    router.push(`/admin/users/${user.id}`)
+  } else {
+    ElMessage.warning('该用户无ID，无法查看详情')
+  }
 }
 
 function openVipDialog(user: UserItem) {

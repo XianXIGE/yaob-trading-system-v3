@@ -19,6 +19,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Admin.vue'),
         meta: { requiresAdmin: true },
       },
+      {
+        path: 'admin/users/:userId',
+        name: 'UserDetail',
+        component: () => import('@/views/UserDetail.vue'),
+        meta: { requiresAdmin: true },
+      },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
