@@ -124,7 +124,7 @@ public class TradeEngineService {
      * 当日亏损 <= -(总资产 * 该比例) 时触发熔断，停止开仓。
      * 统一口径：runScan() 的实时熔断状态与 autoOpenPositions() 的开仓熔断检查共用同一个值。
      */
-    private static final double DAILY_LOSS_CIRCUIT_BREAKER_RATIO = 0.02; // 2%
+    private static final double DAILY_LOSS_CIRCUIT_BREAKER_RATIO = 0.05; // 5% [v3.4 放宽熔断, 配合风控]
 
     /** 解密并返回指定用户的币安 API 密钥对（无密钥返回 null 表示模拟模式） */
     private String[] apiKeysOf(User user) {
@@ -740,7 +740,7 @@ public class TradeEngineService {
         int leverage = user.getLeverage() != null ? user.getLeverage() : 5;
 
         List<String> opened = new ArrayList<>();
-        int maxOpen = Math.min(3, Math.min(pool.size(), maxTotalPositions - currentPositions));
+        int maxOpen = Math.min(2, Math.min(pool.size(), maxTotalPositions - currentPositions)); // [v3.4 每轮开仓2 更聚焦]
         if (currentPositions >= maxTotalPositions) {
             log.info("[auto-trade:{}] 已达最大持仓数{}, 跳过开仓", user.getUsername(), maxTotalPositions);
             return;
@@ -757,6 +757,23 @@ public class TradeEngineService {
                 continue;
             }
 
+            // [v3.4 单笔风险上限] 本仓最大止损额 = openMargin * |sl_ratio|% , 不得超过总资产1%
+            // 防止单仓过度暴露导致连亏击穿账户 (5x杠杆下尤其关键)
+            double totalAssetsNow = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
+            double maxSingleRisk = totalAssetsNow * 0.01; // 单笔风险上限: 总资产1%
+            if (totalAssetsNow > 0 && maxSingleRisk > 0) {
+                String riskStrat = String.valueOf(cand.get("strategy"));
+                Map<String, Object> riskP = params.get(riskStrat.toUpperCase());
+                double riskSlRatio = 0;
+                if (riskP != null) riskSlRatio = getParamDouble(riskP, "sl_ratio");
+                double thisRisk = openMargin * Math.abs(riskSlRatio) / 100.0;
+                if (thisRisk > maxSingleRisk) {
+                    cand.put("unopen_reason", String.format("单笔风险超限(%.2f>%.2f)", thisRisk, maxSingleRisk));
+                    log.warn("[auto-trade:{}] {} 单笔风险超限 止损额%.2f>上限%.2f, 跳过", user.getUsername(), sym0, thisRisk, maxSingleRisk);
+                    continue;
+                }
+            }
+
             String side = "SHORT".equals(cand.get("direction")) ? "SELL" : "BUY";            double price = getDouble(cand, "current_price");
             double qty = price > 0 ? openMargin * leverage / price : 0;
             if (qty <= 0) continue;
@@ -767,7 +784,7 @@ public class TradeEngineService {
                     JsonNode fr = fapi.fundingRate(sym0);
                     if (fr != null && fr.has("lastFundingRate")) {
                         double rate = Double.parseDouble(fr.get("lastFundingRate").asText());
-                        if (Math.abs(rate) > 0.001) {
+                        if (Math.abs(rate) > 0.003) { // [v3.4 放宽费率门槛 0.1%->0.3%]
                             log.info("[auto-trade:{}] {} 资金费率过高, 跳过", user.getUsername(), sym0);
                             cand.put("unopen_reason", String.format("资金费率过高(%.4f)", rate));
                             continue;

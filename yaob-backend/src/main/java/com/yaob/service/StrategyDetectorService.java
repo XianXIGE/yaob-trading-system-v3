@@ -77,6 +77,8 @@ public class StrategyDetectorService {
 
     private Map<String, Object> checkA(Map<String, Object> tick, Map<String, Object> p) {
         // 做空(A): 24h涨幅在[gain_min, gain_max] + 成交额达标
+        // [v3.4 优化] BTC强势时禁止做空(顺大盘), need_btc_weak 缺省 true(默认过滤)
+        if (getParamBool(p, "need_btc_weak", true) && isBtcBullish()) return null;
         double g24 = getDouble(tick, "priceChangePercent"); // 已是百分比，如 38.5
         double qv = getDouble(tick, "quoteVolume");
         double gainMin = getParamDouble(p, "gain_min");
@@ -95,6 +97,8 @@ public class StrategyDetectorService {
 
     private Map<String, Object> checkB(Map<String, Object> tick, Map<String, Object> p) {
         // 做空(B): 当日涨幅>=N% + 成交额达标
+        // [v3.4 优化] BTC强势时禁止做空(顺大盘), need_btc_weak 缺省 true
+        if (getParamBool(p, "need_btc_weak", true) && isBtcBullish()) return null;
         double o = getDouble(tick, "openPrice");
         double c = getDouble(tick, "lastPrice");
         double g = pct(c, o); // 已是百分比，如 38.5
@@ -131,6 +135,8 @@ public class StrategyDetectorService {
 
     private Map<String, Object> checkD(String sym, Map<String, Object> tick, Map<String, Object> p) {
         // 做空(D): N分钟涨幅>=N% (需1m k线)
+        // [v3.4 优化] BTC强势时禁止做空(顺大盘), need_btc_weak 缺省 true
+        if (getParamBool(p, "need_btc_weak", true) && isBtcBullish()) return null;
         int w = (int) getParamDouble(p, "window_minutes");
         try {
             JsonNode k = fapi.klines(sym, "1m", w + 1);
@@ -156,6 +162,8 @@ public class StrategyDetectorService {
 
     private Map<String, Object> checkE(String sym, Map<String, Object> tick, Map<String, Object> p) {
         // 做多(E): 强趋势回踩 - 30天涨幅>100%, EMA50上方, 回撤20%-40%至0.618 Fib
+        // [v3.4 优化] BTC弱势时禁止做多(顺大盘), need_btc_strong 缺省 true
+        if (getParamBool(p, "need_btc_strong", true) && !isBtcBullish()) return null;
         double gain30dMin = getParamDouble(p, "gain_30d_min"); // 30天涨幅下限(%)
         int emaPeriod = (int) getParamDouble(p, "ema_period"); // EMA周期
         double pullbackMin = getParamDouble(p, "pullback_min"); // 回调下限(%)
@@ -439,5 +447,13 @@ public class StrategyDetectorService {
             // klines获取失败, skip
         }
         return null;
+    }
+    /** [v3.4] 读取布尔参数, 缺省返回 defVal */
+    private boolean getParamBool(Map<String, Object> p, String key, boolean defVal) {
+        Object v = p.get(key);
+        if (v == null) return defVal;
+        if (v instanceof Boolean) return (Boolean) v;
+        if (v instanceof Number) return ((Number) v).doubleValue() != 0;
+        return Boolean.parseBoolean(String.valueOf(v));
     }
 }
