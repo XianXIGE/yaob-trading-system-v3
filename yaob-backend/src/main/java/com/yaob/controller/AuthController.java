@@ -2,6 +2,7 @@ package com.yaob.controller;
 
 import com.yaob.common.BusinessException;
 import com.yaob.common.Result;
+import com.yaob.config.WebConfig;
 import com.yaob.dto.LoginRequest;
 import com.yaob.dto.RegisterRequest;
 import com.yaob.entity.User;

@@ -51,7 +51,7 @@ services:
 
   # ===================== Java 后端 =====================
   backend:
-    image: yaob-backend:3.1.1
+    image: yaob-backend:3.2.0
     container_name: yaob-backend
     restart: always
     depends_on:

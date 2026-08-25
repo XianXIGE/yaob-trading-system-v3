@@ -144,3 +144,16 @@ CREATE TABLE IF NOT EXISTS `strategy_stats` (
 -- -------------------------------------------------------
 -- 大盘币种列表（迁移自 v2 DEFAULT_CRYPTO）
 -- 这些会在用户注册时自动插入为 large_cap 类别黑名单
+
+-- -------------------------------------------------------
+-- 初始管理员账号（修复注册即管理员漏洞后，管理员无法再通过注册创建，
+-- 必须在数据库初始化时预置。密码通过 BCrypt 存储，来源：
+--   用户名: XJarvis
+--   密码:  942693Xw!
+-- 如需更换，用 BCrypt 工具生成新哈希替换下方 password_hash。
+-- -------------------------------------------------------
+INSERT INTO `users`
+  (`username`, `password_hash`, `is_vip`, `is_admin`, `binance_api_key`, `binance_api_secret`, `auto_trade_enabled`)
+VALUES
+  ('XJarvis', '$2a$10$JbKD/z7GMPguEuKx8GsNROKyg5OdQ8NN.oMzlB6osvTT/oLNkmR6y', 1, 1, '', '', 0)
+ON DUPLICATE KEY UPDATE `is_admin` = 1;
