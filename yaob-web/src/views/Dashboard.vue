@@ -77,7 +77,7 @@
           />
         </div>
         <div class="control-item">
-          <span class="control-label">排除大盘币</span>
+          <span class="control-label">排除自动黑名单</span>
           <el-switch v-model="excludeLargeCap" @change="handleToggleExcludeLargeCap" :loading="ctrlLoading" />
         </div>
         <div class="control-item">
@@ -305,7 +305,7 @@ async function handleToggleExcludeLargeCap(val: boolean) {
   ctrlLoading.value = true
   try {
     await toggleExcludeLargeCap()
-    ElMessage.success(`排除大盘币已${val ? '开启' : '关闭'}`)
+    ElMessage.success(`排除自动黑名单已${val ? '开启' : '关闭'}`)
     await fetchData()
   } catch {
     excludeLargeCap.value = !val

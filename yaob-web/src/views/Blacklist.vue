@@ -9,14 +9,14 @@
         <span>添加黑名单</span>
       </div>
       <div class="add-row">
-        <el-select v-model="addCategory" size="small" style="width: 120px;">
-          <el-option label="币种市值" value="manual" />
-          <el-option label="股指市值" value="large_cap" />
+        <el-select v-model="addCategory" size="small" style="width: 140px;">
+          <el-option label="手动黑名单" value="manual" />
+          <el-option label="自动黑名单" value="large_cap" />
         </el-select>
         <el-input v-model="newSymbol" placeholder="输入交易对，多个用逗号分隔" size="small" @keyup.enter="handleAdd" />
         <el-button size="small" type="primary" @click="handleAdd" :loading="adding">添加</el-button>
         <el-button size="small" type="danger" plain @click="handleClearAll">清空</el-button>
-        <el-button size="small" @click="handleRestoreDefault">恢复默认币种市值</el-button>
+        <el-button size="small" @click="handleRestoreDefault">恢复默认自动黑名单</el-button>
       </div>
     </div>
 
@@ -59,8 +59,8 @@ const adding = ref(false)
 const addCategory = ref('manual')
 
 const categories = computed(() => [
-  { key: 'manual' as const, label: '币种市值', items: data.value.manual || [] },
-  { key: 'large_cap' as const, label: '股指市值', items: data.value.large_cap || [] },
+  { key: 'manual' as const, label: '手动黑名单', items: data.value.manual || [] },
+  { key: 'large_cap' as const, label: '自动黑名单', items: data.value.large_cap || [] },
 ])
 
 async function fetchData() {
@@ -77,7 +77,7 @@ async function handleAdd() {
   try {
     const symbols = newSymbol.value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
     await addExcludedSymbols(symbols, addCategory.value)
-    ElMessage.success(`已添加 ${symbols.length} 个交易对到${addCategory.value === 'manual' ? '币种市值' : '股指市值'}`)
+    ElMessage.success(`已添加 ${symbols.length} 个交易对到${addCategory.value === 'manual' ? '手动黑名单' : '自动黑名单'}`)
     newSymbol.value = ''
     await fetchData()
   } catch { /* handled */ } finally {
@@ -97,7 +97,7 @@ async function handleRemoveCategory(cat: string) {
   const items = data.value[cat as keyof typeof data.value] || []
   if (!items.length) return
   try {
-    await ElMessageBox.confirm(`确定要删除 ${cat === 'manual' ? '币种市值' : '股指市值'} 中的 ${items.length} 个交易对吗？`, '批量删除', { type: 'warning' })
+    await ElMessageBox.confirm(`确定要删除 ${cat === 'manual' ? '手动黑名单' : '自动黑名单'} 中的 ${items.length} 个交易对吗？`, '批量删除', { type: 'warning' })
     await removeExcludedSymbols(items, cat)
     ElMessage.success('已批量删除')
     await fetchData()
@@ -115,9 +115,9 @@ async function handleClearAll() {
 
 async function handleRestoreDefault() {
   try {
-    await ElMessageBox.confirm('确定要恢复默认币种市值吗？将重新添加BTC、ETH等33个大盘币。', '恢复默认币种市值', { type: 'info' })
+    await ElMessageBox.confirm('确定要恢复默认自动黑名单吗？将按市值>阈值自动重新添加高市值币。', '恢复默认自动黑名单', { type: 'info' })
     await restoreDefaultExcluded()
-    ElMessage.success('已恢复默认币种市值过滤列表')
+    ElMessage.success('已恢复默认自动黑名单')
     await fetchData()
   } catch { /* cancelled or error */ }
 }
