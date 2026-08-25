@@ -779,8 +779,6 @@ public class TradeEngineService {
             }
 
             String side = "SHORT".equals(cand.get("direction")) ? "SELL" : "BUY";            double price = getDouble(cand, "current_price");
-            double qty = price > 0 ? openMargin * leverage / price : 0;
-            if (qty <= 0) continue;
 
             try {
                 // 资金费率过滤：费率绝对值超过0.1%跳过（避免极端费率）
@@ -798,7 +796,21 @@ public class TradeEngineService {
                     // 获取费率失败不阻断
                 }
 
-                fapi.setLeverage(sym0, leverage, keys[0], keys[1]);
+                // 设置杠杆: 若配置杠杆超过该币种最大杠杆上限, 自动降级到上限(避免 FAPI 400 "Leverage N is not valid")
+                int effLeverage = leverage;
+                try {
+                    int maxLev = fapi.getMaxLeverage(sym0);
+                    if (maxLev > 0 && leverage > maxLev) {
+                        effLeverage = maxLev;
+                        log.info("[auto-trade:{}] {} 配置杠杆{}x超上限{}x, 自动降级为{}x", user.getUsername(), sym0, leverage, maxLev, maxLev);
+                    }
+                } catch (Exception e) {
+                    log.warn("[auto-trade:{}] 查询 {} 最大杠杆失败: {}", user.getUsername(), sym0, e.getMessage());
+                }
+                // 按实际生效杠杆计算数量, 保证保证金占用与 openMargin 一致
+                double qty = price > 0 ? openMargin * effLeverage / price : 0;
+                if (qty <= 0) continue;
+                fapi.setLeverage(sym0, effLeverage, keys[0], keys[1]);
                 // 双向持仓模式(Hedge): 开仓必须带对应的 positionSide (LONG/SHORT); 单向传 BOTH
                 String posSide = isHedge(user) ? ("SHORT".equals(cand.get("direction")) ? "SHORT" : "LONG") : "BOTH";
                 JsonNode orderResult = fapi.newOrder(sym0, side, qty, posSide, keys[0], keys[1]);
@@ -828,7 +840,7 @@ public class TradeEngineService {
                 op.setDirection(cand.get("direction").toString());
                 op.setQty(BigDecimal.valueOf(qty));
                 op.setEntryPrice(BigDecimal.valueOf(actualPrice));
-                op.setLeverage(leverage);
+                op.setLeverage(effLeverage);
                 op.setTpRatio(BigDecimal.valueOf(tpRatio));
                 op.setSlRatio(BigDecimal.valueOf(slRatio));
                 op.setStatus("OPEN");

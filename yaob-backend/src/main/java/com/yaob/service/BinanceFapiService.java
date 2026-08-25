@@ -112,6 +112,13 @@ public class BinanceFapiService {
                 Map<String, Double> meta = new HashMap<>();
                 meta.put("stepSize", 0.0);
                 meta.put("tickSize", 0.0);
+                // 币安合约最大杠杆: 位于 @properties.maxLeverage
+                int maxLev = 0;
+                if (s.has("@properties")) {
+                    JsonNode props = s.get("@properties");
+                    if (props.has("maxLeverage")) maxLev = props.get("maxLeverage").asInt();
+                }
+                meta.put("maxLeverage", (double) maxLev);
                 if (s.has("filters")) {
                     for (JsonNode f : s.get("filters")) {
                         String ft = f.get("filterType").asText();
@@ -126,6 +133,22 @@ public class BinanceFapiService {
             }
         }
         return resp;
+    }
+
+    /**
+     * 查某合约的最大杠杆上限(来自币安 exchangeInfo @properties.maxLeverage)。
+     * 缓存未命中时触发一次 exchangeInfo 刷新; 仍查不到返回 0(表示未知, 调用方不应降级)。
+     */
+    public int getMaxLeverage(String symbol) {
+        try {
+            if (symbolMeta.isEmpty()) exchangeInfo();
+        } catch (Exception e) {
+            log.warn("获取 exchangeInfo 失败: {}", e.getMessage());
+        }
+        Map<String, Double> meta = symbolMeta.get(symbol);
+        if (meta == null) return 0;
+        Double v = meta.get("maxLeverage");
+        return v == null ? 0 : v.intValue();
     }
 
     private static final String TICKER_CACHE_KEY = "yaob:tickers";
