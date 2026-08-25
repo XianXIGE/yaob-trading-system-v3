@@ -786,7 +786,7 @@ public class TradeEngineService {
                 // 设置杠杆: 若配置杠杆超过该币种最大杠杆上限, 自动降级到上限(避免 FAPI 400 "Leverage N is not valid")
                 int effLeverage = leverage;
                 try {
-                    int maxLev = fapi.getMaxLeverage(sym0);
+                    int maxLev = fapi.getMaxLeverage(sym0, keys[0], keys[1]);
                     if (maxLev > 0 && leverage > maxLev) {
                         effLeverage = maxLev;
                         log.info("[auto-trade:{}] {} 配置杠杆{}x超上限{}x, 自动降级为{}x", user.getUsername(), sym0, leverage, maxLev, maxLev);

@@ -139,16 +139,26 @@ public class BinanceFapiService {
      * 查某合约的最大杠杆上限(来自币安 exchangeInfo @properties.maxLeverage)。
      * 缓存未命中时触发一次 exchangeInfo 刷新; 仍查不到返回 0(表示未知, 调用方不应降级)。
      */
-    public int getMaxLeverage(String symbol) {
+    public int getMaxLeverage(String symbol, String apiKey, String apiSecret) {
+        // 币安 fapi/v1/exchangeInfo 不含 maxLeverage; 须调用带签名的 /fapi/v1/leverageBracket 获取杠杆档位
         try {
-            if (symbolMeta.isEmpty()) exchangeInfo();
+            Map<String, String> params = new LinkedHashMap<>();
+            params.put("symbol", symbol);
+            JsonNode resp = _get("/fapi/v1/leverageBracket", params, true, apiKey, apiSecret);
+            if (resp != null && resp.isArray() && resp.size() > 0) {
+                // 返回档位数组, 取 max 档位的 initialLeverage 作为该币最大杠杆
+                int max = 0;
+                for (JsonNode b : resp) {
+                    int il = 0;
+                    if (b.has("initialLeverage")) il = b.get("initialLeverage").asInt();
+                    if (il > max) max = il;
+                }
+                return max;
+            }
         } catch (Exception e) {
-            log.warn("获取 exchangeInfo 失败: {}", e.getMessage());
+            log.warn("获取 {} 最大杠杆失败: {}", symbol, e.getMessage());
         }
-        Map<String, Double> meta = symbolMeta.get(symbol);
-        if (meta == null) return 0;
-        Double v = meta.get("maxLeverage");
-        return v == null ? 0 : v.intValue();
+        return 0;
     }
 
     private static final String TICKER_CACHE_KEY = "yaob:tickers";
