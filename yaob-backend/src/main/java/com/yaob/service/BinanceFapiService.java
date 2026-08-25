@@ -360,7 +360,10 @@ public class BinanceFapiService {
         if (params != null) {
             for (Map.Entry<String, String> e : params.entrySet()) {
                 if (sb.length() > 0) sb.append("&");
-                sb.append(e.getKey()).append("=").append(e.getValue());
+                sb.append(e.getKey()).append("=");
+                // 对 value 做 URL 编码(UTF-8): 中文等非 ASCII symbol(如 龙虾USDT)必须编码,
+                // 且签名与发送都用同一编码串, 否则币安端用编码后字节验签不匹配 -> -1022
+                sb.append(urlEncode(e.getValue()));
             }
         }
         if (signed) {
@@ -372,6 +375,16 @@ public class BinanceFapiService {
             sb.append("&signature=").append(sig);
         }
         return sb.toString();
+    }
+
+    /** URL 编码(UTF-8), 保留 URI 保留字符外的特殊字符按表单规则编码 */
+    private String urlEncode(String v) {
+        try {
+            return java.net.URLEncoder.encode(v, StandardCharsets.UTF_8.name())
+                    .replace("+", "%20");
+        } catch (Exception e) {
+            return v;
+        }
     }
 
     private JsonNode handleResponse(HttpResponse<String> response) throws IOException {
