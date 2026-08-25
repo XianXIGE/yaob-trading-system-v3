@@ -145,13 +145,18 @@ public class BinanceFapiService {
             Map<String, String> params = new LinkedHashMap<>();
             params.put("symbol", symbol);
             JsonNode resp = _get("/fapi/v1/leverageBracket", params, true, apiKey, apiSecret);
+            // 返回结构: [{"symbol":"XXX","brackets":[{"bracket":1,"initialLeverage":10,...},...]}, ...]
+            // 注意: 杠杆随仓位档位递减, 最大杠杆在 brackets 内 initialLeverage 的最大值(通常为最小面额档)
             if (resp != null && resp.isArray() && resp.size() > 0) {
-                // 返回档位数组, 取 max 档位的 initialLeverage 作为该币最大杠杆
                 int max = 0;
-                for (JsonNode b : resp) {
-                    int il = 0;
-                    if (b.has("initialLeverage")) il = b.get("initialLeverage").asInt();
-                    if (il > max) max = il;
+                for (JsonNode item : resp) {
+                    JsonNode brackets = item.get("brackets");
+                    if (brackets == null || !brackets.isArray()) continue;
+                    for (JsonNode br : brackets) {
+                        int il = 0;
+                        if (br.has("initialLeverage")) il = br.get("initialLeverage").asInt();
+                        if (il > max) max = il;
+                    }
                 }
                 return max;
             }
