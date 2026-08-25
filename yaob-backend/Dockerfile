@@ -22,7 +22,7 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-COPY --from=builder /build/target/yaob-backend-3.0.0.jar app.jar
+COPY --from=builder /build/target/yaob-backend-3.1.0.jar app.jar
 
 ENV JAVA_OPTS="-Xms256m -Xmx512m"
 ENV SPRING_PROFILES_ACTIVE=prod
