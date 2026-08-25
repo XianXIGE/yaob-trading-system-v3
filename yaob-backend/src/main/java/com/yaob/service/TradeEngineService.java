@@ -33,8 +33,6 @@ public class TradeEngineService {
     @Autowired
     private StrategyConfigMapper strategyConfigMapper;
     @Autowired
-    private StrategyStatMapper strategyStatMapper;
-    @Autowired
     private ExcludedSymbolMapper excludedSymbolMapper;
     @Autowired
     private UserService userService;
@@ -42,6 +40,8 @@ public class TradeEngineService {
     private ObjectMapper objectMapper;
     @Autowired
     private CryptoUtil cryptoUtil;
+    @Autowired
+    private PositionCloseService positionCloseService;
 
     // 运行时状态: userId -> runtime
     private final Map<Long, RuntimeState> runtimeMap = new ConcurrentHashMap<>();
@@ -861,7 +861,8 @@ public class TradeEngineService {
         if (!accountOk) return;
 
         for (OpenPosition pos : openPositions) {
-            String sym0 = pos.getSymbol();
+            // 统一用币安全原始格式(去斜杠)做匹配，避免 slash/raw 格式不一致导致误判"无持仓"而错误清理记录
+            String sym0 = rawSymbol(pos.getSymbol());
             JsonNode livePos = livePositions.get(sym0);
 
             if (livePos == null) {
@@ -993,61 +994,13 @@ public class TradeEngineService {
     @Transactional
     private void closePositionRecord(OpenPosition pos, BigDecimal closePrice, String reason,
                                       BigDecimal pnl, BigDecimal pnlRatio, Long userId) {
-        pos.setStatus("CLOSED");
-        pos.setClosedAt(LocalDateTime.now());
-        pos.setClosePrice(closePrice);
-        pos.setCloseReason(reason);
-        pos.setPnl(pnl);
-        pos.setPnlRatio(pnlRatio);
-        openPositionMapper.updateById(pos);
-
-        // 归档到 trade_history
-        TradeHistory th = new TradeHistory();
-        th.setUserId(userId);
-        th.setPositionId(pos.getId());
-        th.setSymbol(pos.getSymbol());
-        th.setStrategy(pos.getStrategy());
-        th.setDirection(pos.getDirection());
-        th.setQty(pos.getQty());
-        th.setEntryPrice(pos.getEntryPrice());
-        th.setExitPrice(closePrice);
-        th.setLeverage(pos.getLeverage());
-        th.setPnl(pnl);
-        th.setPnlRatio(pnlRatio);
-        th.setCloseReason(reason);
-        th.setOpenedAt(pos.getOpenedAt());
-        th.setClosedAt(LocalDateTime.now());
-        tradeHistoryMapper.insert(th);
-
-        // 更新策略统计
-        updateStrategyStats(userId, pos.getStrategy(), reason, pnl);
+        // 委托给独立的 PositionCloseService：其 @Transactional 能被 Spring 代理正确拦截，
+        // 保证关闭持仓 + 归档流水 + 更新统计三者原子性（自调用不生效，故拆出）。
+        positionCloseService.closePositionRecord(pos, closePrice, reason, pnl, pnlRatio, userId);
     }
 
     public void updateStrategyStats(Long userId, String strategy, String reason, BigDecimal pnl) {
-        StrategyStat stat = strategyStatMapper.findByUserIdAndStrategy(userId, strategy);
-        if (stat == null) {
-            stat = new StrategyStat();
-            stat.setUserId(userId);
-            stat.setStrategy(strategy);
-            stat.setTotalTrades(0);
-            stat.setWinTrades(0);
-            stat.setTotalPnl(BigDecimal.ZERO);
-            stat.setTpCount(0);
-            stat.setSlCount(0);
-            stat.setManualCount(0);
-            strategyStatMapper.insert(stat);
-        }
-        stat.setTotalTrades(stat.getTotalTrades() + 1);
-        if (pnl != null && pnl.compareTo(BigDecimal.ZERO) > 0) {
-            stat.setWinTrades(stat.getWinTrades() + 1);
-        }
-        if (pnl != null) {
-            stat.setTotalPnl(stat.getTotalPnl().add(pnl));
-        }
-        if ("tp".equals(reason)) stat.setTpCount(stat.getTpCount() + 1);
-        else if ("sl".equals(reason)) stat.setSlCount(stat.getSlCount() + 1);
-        else stat.setManualCount(stat.getManualCount() + 1);
-        strategyStatMapper.updateById(stat);
+        positionCloseService.updateStrategyStats(userId, strategy, reason, pnl);
     }
 
     // ==================== Auto Open Positions ====================
@@ -1143,7 +1096,7 @@ public class TradeEngineService {
         // account 拉取失败时从数据库补全已持仓币种，防止重复开仓
         if (!accountOk2) {
             for (OpenPosition op : openPositionMapper.findOpenByUserId(userId)) {
-                held.add(op.getSymbol());
+                held.add(rawSymbol(op.getSymbol()));
             }
         }
 
@@ -1159,7 +1112,7 @@ public class TradeEngineService {
         }
         for (int i = 0; i < maxOpen; i++) {
             Map<String, Object> cand = pool.get(i);
-            String sym0 = cand.get("symbol").toString().replace("/", "").toUpperCase();
+            String sym0 = rawSymbol(cand.get("symbol").toString());
 
             if (held.contains(sym0)) continue;
 
@@ -1201,7 +1154,7 @@ public class TradeEngineService {
                         if (actualPrice <= 0) actualPrice = price;
                     } catch (Exception e) { /* 用ticker价格兜底 */ }
                 }
-                opened.add(cand.get("symbol").toString());
+                opened.add(sym0);
                 avail -= openMargin;
                 rt.availableMargin = BigDecimal.valueOf(avail);
 
@@ -1350,5 +1303,14 @@ public class TradeEngineService {
             return sym.substring(0, sym.length() - 4) + "/USDT";
         }
         return sym;
+    }
+
+    /**
+     * 规范为币安全原始交易对格式（去掉斜杠）："BTC/USDT" / "btcusdt" -> "BTCUSDT".
+     * 用于所有需要与币安 API / 数据库持仓做比较/去重的场景，避免 slash/raw 格式不一致导致的匹配失败。
+     */
+    private static String rawSymbol(String sym) {
+        if (sym == null) return null;
+        return sym.replace("/", "").toUpperCase();
     }
 }

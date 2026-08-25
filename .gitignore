@@ -6,6 +6,7 @@ yaob-backend/target/
 # Node
 yaob-web/node_modules/
 yaob-web/dist/
+yaob-web/yaob
 
 # IDE
 .idea/

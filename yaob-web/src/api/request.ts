@@ -10,6 +10,12 @@ const request: AxiosInstance = axios.create({
 
 request.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    // 写请求携带 CSRF Token（从登录/注册响应或 /me 接口获取，存 sessionStorage）
+    const csrf = sessionStorage.getItem('yaob_csrf')
+    const method = (config.method || 'get').toUpperCase()
+    if (csrf && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      config.headers['X-CSRF-Token'] = csrf
+    }
     return config
   },
   (error) => Promise.reject(error)

@@ -25,7 +25,10 @@ public class CryptoUtil {
 
     private final byte[] keyBytes;
 
-    public CryptoUtil(@Value("${yaob.encryption.key:yaob-v3-default-secret-key-change-me}") String key) {
+    public CryptoUtil(@Value("${yaob.encryption.key}") String key) {
+        if (key == null || key.isBlank()) {
+            throw new IllegalStateException("加密密钥未配置：必须通过环境变量 YAOB_ENCRYPTION_KEY 提供");
+        }
         try {
             MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
             this.keyBytes = sha256.digest(key.getBytes(StandardCharsets.UTF_8));
@@ -63,12 +66,14 @@ public class CryptoUtil {
 
     /**
      * 解密 Base64 编码的 "iv:ciphertext" 格式数据
+     * 解密失败时抛出异常，绝不回退返回原文——避免密钥变更后把密文当明文返回导致泄漏。
+     * 旧明文数据（不含冒号）仍直接返回，兼容迁移前存储。
      */
     public String decrypt(String ciphertext) {
         if (ciphertext == null || ciphertext.isEmpty()) {
             return ciphertext;
         }
-        // 兼容旧数据：如果不是加密格式（没有冒号），直接返回原文
+        // 兼容旧数据：不是加密格式（没有冒号）——这种情况可能是未加密的明文，直接返回
         if (!ciphertext.contains(":")) {
             return ciphertext;
         }
@@ -85,8 +90,7 @@ public class CryptoUtil {
             byte[] decrypted = cipher.doFinal(encrypted);
             return new String(decrypted, StandardCharsets.UTF_8);
         } catch (Exception e) {
-            // 解密失败可能是旧数据或密钥变更，返回原文兜底
-            return ciphertext;
+            throw new IllegalStateException("解密失败：请确认 YAOB_ENCRYPTION_KEY 是否与加密时一致，或执行数据迁移", e);
         }
     }
 

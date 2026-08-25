@@ -11,7 +11,10 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -20,6 +23,8 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    private final SecureRandom random = new SecureRandom();
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
@@ -36,7 +41,12 @@ public class WebConfig implements WebMvcConfigurer {
         // 登录/注册限流拦截器
         registry.addInterceptor(new RateLimitInterceptor())
                 .addPathPatterns("/api/login", "/api/register");
-        
+
+        // CSRF 防护（除登录/注册外的所有写请求）
+        registry.addInterceptor(new CsrfInterceptor())
+                .addPathPatterns("/api/**")
+                .excludePathPatterns("/api/login", "/api/register");
+
         // 认证拦截器
         registry.addInterceptor(new AuthInterceptor())
                 .addPathPatterns("/api/**")
@@ -44,6 +54,56 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/login",
                         "/api/register"
                 );
+    }
+
+    /**
+     * CSRF 防护：
+     * 基于 Session 的 Token 校验。登录/注册成功后在 Session 中生成随机 token，
+     * 前端通过 X-CSRF-Token 请求头携带。所有非安全写方法（POST/PUT/DELETE/PATCH）均校验，
+     * 防止跨站请求伪造对用户状态/资金类操作发起越权请求（改API Key、开自动交易、删用户等）。
+     */
+    class CsrfInterceptor implements HandlerInterceptor {
+        private static final String TOKEN_ATTR = "csrfToken";
+        private static final Set<String> SAFE_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
+        private final SecureRandom random = new SecureRandom();
+
+        @Override
+        public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+            if (SAFE_METHODS.contains(request.getMethod().toUpperCase())) {
+                return true;
+            }
+            HttpSession session = request.getSession(false);
+            if (session == null) {
+                response.setStatus(401);
+                return true;
+            }
+            Object sessionToken = session.getAttribute(TOKEN_ATTR);
+            if (sessionToken == null) {
+                sessionToken = Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(random.generateSeed(32));
+                session.setAttribute(TOKEN_ATTR, sessionToken);
+            }
+            String headerToken = request.getHeader("X-CSRF-Token");
+            if (headerToken == null || !sessionToken.equals(headerToken)) {
+                response.setStatus(403);
+                response.setContentType("application/json;charset=UTF-8");
+                response.getWriter().write(objectMapper.writeValueAsString(
+                        Map.of("code", 403, "msg", "CSRF 校验失败，请刷新页面重试")));
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * 生成 CSRF Token（登录/注册成功后前端调用，用于后续写请求携带）。
+     * 暴露给控制器调用。
+     */
+    public String issueCsrfToken(HttpSession session) {
+        String token = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(random.generateSeed(32));
+        session.setAttribute("csrfToken", token);
+        return token;
     }
 
     /**

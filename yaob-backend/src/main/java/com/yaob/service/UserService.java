@@ -37,7 +37,7 @@ public class UserService {
     @Autowired
     private CryptoUtil cryptoUtil;
 
-    @Value("${admin.user:}")
+    @Value("${admin.user}")
     private String adminUser;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -152,11 +152,15 @@ public class UserService {
         if (userMapper.findByUsername(username) != null) {
             throw new BusinessException("用户名已存在");
         }
+        if (username.equals(adminUser)) {
+            // 管理员账号不允许通过公开注册创建，必须由系统预置/其他方式开通，防止开放注册抢占管理员权限
+            throw new BusinessException("该用户名不可注册");
+        }
         User user = new User();
         user.setUsername(username);
         user.setPasswordHash(passwordEncoder.encode(password));
         user.setIsVip(false);
-        user.setIsAdmin(username.equals(adminUser) && !adminUser.isEmpty());
+        user.setIsAdmin(false);
         user.setBinanceApiKey("");
         user.setBinanceApiSecret("");
         user.setAutoTradeEnabled(false);

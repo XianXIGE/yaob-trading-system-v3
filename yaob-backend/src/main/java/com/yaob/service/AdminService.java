@@ -18,7 +18,7 @@ public class AdminService {
     @Autowired
     private UserMapper userMapper;
 
-    @Value("${admin.user:XJarvis}")
+    @Value("${admin.user}")
     private String adminUser;
 
     public List<AdminUserVO> listUsers() {

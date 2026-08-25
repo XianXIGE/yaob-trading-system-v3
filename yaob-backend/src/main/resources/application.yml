@@ -1,11 +1,22 @@
 server:
   port: 8100
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        # 注意：当前部署走 http(150.158.91.2)，若 mis-set secure=true 会导致浏览器不发送 Cookie、登录失效。
+        # 上线 HTTPS 后请改为 true。默认 false 以兼容现网 http。
+        secure: ${SERVER_COOKIE_SECURE:false}
+        same-site: lax
+        # 会话过期时间(秒)，默认30分钟
+        timeout: 30m
 
 spring:
   datasource:
     url: jdbc:mysql://localhost:3307/yaob_v3?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: yaob
-    password: ${DB_PASSWORD:yaob_pass_2026}
+    # 数据库密码：必须通过环境变量 DB_PASSWORD 注入，无默认值（缺失则启动失败）
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   data:
     redis:
@@ -20,7 +31,9 @@ mybatis-plus:
   type-aliases-package: com.yaob.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 生产环境关闭 SQL 日志（StdOutImpl 会打印含敏感字段的 SQL）。本地调试可改回 StdOutImpl。
+    # log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: ${MYBATIS_LOG_IMPL:org.apache.ibatis.logging.nologging.NoLoggingImpl}
   global-config:
     db-config:
       id-type: auto
@@ -36,12 +49,15 @@ coingecko:
 
 # 管理员用户名（从环境变量注入，无默认值）
 admin:
-  user: ${ADMIN_USER:}
+  # 管理员用户名：必须通过环境变量 ADMIN_USER 注入，无默认值（缺失则启动失败）
+  user: ${ADMIN_USER}
 
-# 加密密钥
+# 加密密钥：必须通过环境变量 YAOB_ENCRYPTION_KEY 注入，无默认值（缺失则启动失败）
+# 严禁使用默认值——若保留默认值，等于把加密密钥暴露在公开仓库中
+# 注意：轮换此密钥会使历史加密的币安 API Secret 无法解密，需配合数据迁移
 yaob:
   encryption:
-    key: ${YAOB_ENCRYPTION_KEY:yaob-v3-default-secret-key-change-me}
+    key: ${YAOB_ENCRYPTION_KEY}
 
 logging:
   level:

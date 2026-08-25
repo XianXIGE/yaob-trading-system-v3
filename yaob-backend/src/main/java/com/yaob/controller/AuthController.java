@@ -22,6 +22,9 @@ public class AuthController {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private WebConfig webConfig;
+
     @PostMapping("/login")
     public Result<Map<String, Object>> login(@RequestBody LoginRequest req, HttpSession session) {
         User user = userService.login(req.getUsername(), req.getPassword(), session);
@@ -29,6 +32,7 @@ public class AuthController {
         data.put("username", user.getUsername());
         data.put("is_vip", userService.isVip(user));
         data.put("is_admin", userService.isAdmin(user));
+        data.put("csrf_token", webConfig.issueCsrfToken(session));
         return Result.success(data);
     }
 
@@ -41,6 +45,7 @@ public class AuthController {
         data.put("username", user.getUsername());
         data.put("is_vip", false);
         data.put("is_admin", userService.isAdmin(user));
+        data.put("csrf_token", webConfig.issueCsrfToken(session));
         return Result.success(data);
     }
 
@@ -62,6 +67,7 @@ public class AuthController {
         data.put("is_vip", userService.isVip(user));
         data.put("is_admin", userService.isAdmin(user));
         data.put("vip_expire_at", user.getVipExpireAt());
+        data.put("csrf_token", webConfig.issueCsrfToken(session));
         return Result.success(data);
     }
 

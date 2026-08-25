@@ -24,7 +24,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     const res = await apiLogin(username, password)
-    // 后端返回 {code:200, data:{username, is_vip, is_admin}}
+    // 后端返回 {code:200, data:{username, is_vip, is_admin, csrf_token}}
     const data = (res as any).data || res
     user.value = {
       username: data.username,
@@ -32,6 +32,7 @@ export const useAuthStore = defineStore('auth', () => {
       is_admin: data.is_admin,
     }
     sessionStorage.setItem('yaob_user', JSON.stringify(user.value))
+    if (data.csrf_token) sessionStorage.setItem('yaob_csrf', data.csrf_token)
     return user.value
   }
 
@@ -47,6 +48,7 @@ export const useAuthStore = defineStore('auth', () => {
           vip_expire_at: data.vip_expire_at,
         }
         sessionStorage.setItem('yaob_user', JSON.stringify(user.value))
+        if (data.csrf_token) sessionStorage.setItem('yaob_csrf', data.csrf_token)
         return true
       }
       return false
@@ -61,6 +63,7 @@ export const useAuthStore = defineStore('auth', () => {
     try { await apiLogout() } catch { /* ignore */ }
     user.value = null
     sessionStorage.removeItem('yaob_user')
+    sessionStorage.removeItem('yaob_csrf')
   }
 
   return { user, isLoggedIn, isAdmin, isVip, username, login, logout, fetchMe }

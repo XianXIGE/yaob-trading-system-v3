@@ -7,10 +7,11 @@ services:
     container_name: yaob-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-yaob_root_2026}
+      # 以下三个变量必须显式提供，不再提供默认值（防止密钥/口令提交到公开仓库）
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
       MYSQL_DATABASE: yaob_v3
       MYSQL_USER: yaob
-      MYSQL_PASSWORD: ${DB_PASSWORD:-yaob_pass_2026}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     ports:
       - "3307:3306"
     volumes:
@@ -23,7 +24,7 @@ services:
       --max-connections=200
       --innodb-buffer-pool-size=256M
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD:-yaob_root_2026}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$${DB_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -62,12 +63,12 @@ services:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/yaob_v3?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
       SPRING_DATASOURCE_USERNAME: yaob
-      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-yaob_pass_2026}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       FAPI_PROXY: http://host.docker.internal:10809
-      ADMIN_USER: XJarvis
-      YAOB_ENCRYPTION_KEY: ${YAOB_ENC_KEY:-yaob-v3-prod-encryption-2026}
+      ADMIN_USER: ${ADMIN_USER}
+      YAOB_ENCRYPTION_KEY: ${YAOB_ENCRYPTION_KEY}
       COINGECKO_PROXY: http://host.docker.internal:10809
     ports:
       - "8101:8100"
