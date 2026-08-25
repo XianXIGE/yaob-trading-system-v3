@@ -54,6 +54,10 @@ public class TradeEngineService {
     // 运行时状态: userId -> runtime
     private final Map<Long, RuntimeState> runtimeMap = new ConcurrentHashMap<>();
 
+    /** 止损冷却: symbol -> 冷却截止时间戳(epoch ms)。止损平仓后短期内禁止再次开仓, 避免同一币反复止损(PROM坏洞)。 */
+    private final Map<String, Long> slCooldownEnds = new ConcurrentHashMap<>();
+    private static final long SL_COOLDOWN_MS = 30 * 60 * 1000L; // 30分钟
+
     /**
      * 候选池检测线程池（复用，避免每次扫描新建/销毁 16-48 线程）。
      * 懒加载：TradeEngineService 为长生命周期单例，池常驻，跨扫描复用。
@@ -605,6 +609,11 @@ public class TradeEngineService {
                     
                     if (fullyClosed) {
                         // 完全平仓，归档记录
+                        // [止损冷却] 止损平仓后记录该币冷却截止时间, 短期内禁止再次开仓(避免同一币反复止损)
+                        if ("sl".equals(reason)) {
+                            slCooldownEnds.put(sym0, System.currentTimeMillis() + SL_COOLDOWN_MS);
+                            log.info("[auto-close:{}] {} 止损冷却计时 {} 分钟", user.getUsername(), sym0, SL_COOLDOWN_MS / 60000);
+                        }
                         closePositionRecord(pos, BigDecimal.valueOf(last), reason,
                                 BigDecimal.valueOf(pnl), BigDecimal.valueOf(ratio), userId);
                     } else {
@@ -741,6 +750,14 @@ public class TradeEngineService {
             String sym0 = rawSymbol(cand.get("symbol").toString());
 
             if (held.contains(sym0)) continue;
+
+            // [止损冷却] 该币止损平仓后处于冷却期内, 跳过开仓(避免同一币反复止损)
+            Long end = slCooldownEnds.get(sym0);
+            if (end != null && end > System.currentTimeMillis()) {
+                cand.put("unopen_reason", String.format("止损冷却中(剩%d分)", (end - System.currentTimeMillis()) / 60000 + 1));
+                log.info("[auto-trade:{}] {} 止损冷却中, 跳过开仓", user.getUsername(), sym0);
+                continue;
+            }
 
             // 保证金门槛
             if (avail < openMargin) {
