@@ -757,21 +757,21 @@ public class TradeEngineService {
                 continue;
             }
 
-            // [v3.4 单笔风险上限] 本仓最大止损额 = openMargin * |sl_ratio|% , 不得超过总资产1%
-            // 防止单仓过度暴露导致连亏击穿账户 (5x杠杆下尤其关键)
+            // [v3.4 单笔风险上限] 本仓最大止损额 = openMargin * |sl_ratio|% 
+            // 方案B：上限 = max(总资产*1%, openMargin档位对应风险) —— 保证单仓能按用户设定的开仓档位正常开，
+            // 仅当 openMargin 档位远超账户承受能力(总资产过小)时才拦截，避免小账户被 1% 上限误伤导致永不开仓。
             double totalAssetsNow = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
-            double maxSingleRisk = totalAssetsNow * 0.01; // 单笔风险上限: 总资产1%
-            if (totalAssetsNow > 0 && maxSingleRisk > 0) {
-                String riskStrat = String.valueOf(cand.get("strategy"));
-                Map<String, Object> riskP = params.get(riskStrat.toUpperCase());
-                double riskSlRatio = 0;
-                if (riskP != null) riskSlRatio = getParamDouble(riskP, "sl_ratio");
-                double thisRisk = openMargin * Math.abs(riskSlRatio) / 100.0;
-                if (thisRisk > maxSingleRisk) {
-                    cand.put("unopen_reason", String.format("单笔风险超限(%.2f>%.2f)", thisRisk, maxSingleRisk));
-                    log.warn("[auto-trade:{}] {} 单笔风险超限 止损额%.2f>上限%.2f, 跳过", user.getUsername(), sym0, thisRisk, maxSingleRisk);
-                    continue;
-                }
+            String riskStrat = String.valueOf(cand.get("strategy"));
+            Map<String, Object> riskP = params.get(riskStrat.toUpperCase());
+            double riskSlRatio = 0;
+            if (riskP != null) riskSlRatio = getParamDouble(riskP, "sl_ratio");
+            double thisRisk = openMargin * Math.abs(riskSlRatio) / 100.0;
+            double minRiskFloor = openMargin * Math.abs(riskSlRatio) / 100.0; // openMargin 档位保底风险
+            double maxSingleRisk = Math.max(totalAssetsNow * 0.01, minRiskFloor);
+            if (totalAssetsNow > 0 && thisRisk > maxSingleRisk) {
+                cand.put("unopen_reason", String.format("单笔风险超限(%s>%s)", fmt(thisRisk), fmt(maxSingleRisk)));
+                log.warn("[auto-trade:{}] {} 单笔风险超限 止损额={} > 上限={}, 跳过", user.getUsername(), sym0, fmt(thisRisk), fmt(maxSingleRisk));
+                continue;
             }
 
             String side = "SHORT".equals(cand.get("direction")) ? "SELL" : "BUY";            double price = getDouble(cand, "current_price");
@@ -902,6 +902,11 @@ public class TradeEngineService {
     }
 
     // ==================== Helpers ====================
+
+    /** 保留两位小数的金额格式化 */
+    private static String fmt(double v) {
+        return String.format("%.2f", v);
+    }
 
     /**
      * 获取用户黑名单，按分类拆分：
