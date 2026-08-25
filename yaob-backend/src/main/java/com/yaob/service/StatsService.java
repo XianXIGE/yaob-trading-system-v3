@@ -41,10 +41,11 @@ public class StatsService {
             totalPnl = totalPnl.add(s.getTotalPnl() != null ? s.getTotalPnl() : BigDecimal.ZERO);
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("total_trades", totalTrades);
-        result.put("win_trades", winTrades);
-        result.put("win_rate", totalTrades > 0 ? Math.round(winTrades * 1000.0 / totalTrades) / 10.0 : 0);
-        result.put("total_pnl", totalPnl);
+        // 注意：字段用驼峰命名，与前端 Dashboard.vue 读取一致（totalTrades/winTrades/winRate/totalPnl）
+        result.put("totalTrades", totalTrades);
+        result.put("winTrades", winTrades);
+        result.put("winRate", totalTrades > 0 ? Math.round(winTrades * 1000.0 / totalTrades) / 10.0 : 0);
+        result.put("totalPnl", totalPnl);
         return result;
     }
 
