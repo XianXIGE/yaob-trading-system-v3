@@ -448,22 +448,9 @@ public class TradeEngineService {
         // 复用线程池，此处不 shutdown（池为类级常驻）
         pool.addAll(concurrentPool);
 
-        // 排序: SHORT在前, LONG在后, 组内按 priority 降序
-        List<Map<String, Object>> shorts = new ArrayList<>();
-        List<Map<String, Object>> longs = new ArrayList<>();
-        for (Map<String, Object> c : pool) {
-            if ("SHORT".equals(c.get("direction"))) {
-                shorts.add(c);
-            } else {
-                longs.add(c);
-            }
-        }
-        shorts.sort((a, b) -> Double.compare(getDouble(b, "priority"), getDouble(a, "priority")));
-        longs.sort((a, b) -> Double.compare(getDouble(b, "priority"), getDouble(a, "priority")));
-
-        List<Map<String, Object>> result = new ArrayList<>();
-        result.addAll(shorts);
-        result.addAll(longs);
+        // 排序: 全局按 priority 降序混排(不再 SHORT 全排前面把 LONG 挤出版外 → 候选池 10 名内多空自然分布)
+        List<Map<String, Object>> result = new ArrayList<>(pool);
+        result.sort((a, b) -> Double.compare(getDouble(b, "priority"), getDouble(a, "priority")));
         if (result.size() > 10) result = result.subList(0, 10);
         return result;
     }
