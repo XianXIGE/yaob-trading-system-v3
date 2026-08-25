@@ -52,6 +52,11 @@ admin:
   # 管理员用户名：必须通过环境变量 ADMIN_USER 注入，无默认值（缺失则启动失败）
   user: ${ADMIN_USER}
 
+# 用户并行扫描并发度（默认空=自动按 CPU 核数，范围 4-32；可通过 TRADE_SCAN_PARALLEL 覆盖）
+trade:
+  scan:
+    parallel: ${TRADE_SCAN_PARALLEL:}
+
 # 加密密钥：必须通过环境变量 YAOB_ENCRYPTION_KEY 注入，无默认值（缺失则启动失败）
 # 严禁使用默认值——若保留默认值，等于把加密密钥暴露在公开仓库中
 # 注意：轮换此密钥会使历史加密的币安 API Secret 无法解密，需配合数据迁移

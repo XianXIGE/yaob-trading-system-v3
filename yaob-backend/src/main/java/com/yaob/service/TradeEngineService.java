@@ -47,6 +47,10 @@ public class TradeEngineService {
     @Autowired
     private StrategyDetectorService strategyDetector;
 
+    /** 用户并行扫描并发度（可选，application.yml 可覆盖） */
+    @org.springframework.beans.factory.annotation.Value("${trade.scan.parallel:}")
+    private String maxUserScanParallel = "";
+
     // 运行时状态: userId -> runtime
     private final Map<Long, RuntimeState> runtimeMap = new ConcurrentHashMap<>();
 
@@ -74,6 +78,45 @@ public class TradeEngineService {
             }
         }
         return pool;
+    }
+
+    /**
+     * 用户扫描并行线程池（复用常驻）。
+     * 多用户架构：每轮扫描并行处理多个用户的 runScan，而非串行逐个。
+     * 并发度有上限（默认 maxUserScanParallel），避免多用户同时调币安账户接口触发限流；
+     * 行情走 Redis 缓存（2分钟TTL）不重复拉。
+     */
+    private volatile ExecutorService scanPool;
+
+    private ExecutorService getScanPool() {
+        ExecutorService pool = scanPool;
+        if (pool == null) {
+            synchronized (this) {
+                pool = scanPool;
+                if (pool == null) {
+                    int threads = getMaxUserScanParallel();
+                    pool = Executors.newFixedThreadPool(threads, r -> {
+                        Thread t = new Thread(r, "yaob-user-scan");
+                        t.setDaemon(true);
+                        return t;
+                    });
+                    scanPool = pool;
+                }
+            }
+        }
+        return pool;
+    }
+
+    /** 用户扫描并行并发度：4-32，默认 min(8, CPU核数)。@Value 可覆盖 */
+    private int getMaxUserScanParallel() {
+        int cpu = Runtime.getRuntime().availableProcessors();
+        int def = Math.max(4, Math.min(8, cpu));
+        try {
+            int cfg = Integer.parseInt(maxUserScanParallel);
+            return Math.max(4, Math.min(32, cfg));
+        } catch (Exception e) {
+            return def;
+        }
     }
 
     /**
@@ -163,12 +206,25 @@ public class TradeEngineService {
         while (true) {
             try {
                 List<User> traders = getActiveTraders();
+                if (traders.isEmpty()) {
+                    Thread.sleep(120_000);
+                    continue;
+                }
+                // 并行扫描多个用户（多用户架构），并发度受控避免币安账户接口限流；
+                // 行情走 Redis 缓存不重复拉。所有用户扫完后统一休眠再进入下一轮。
+                ExecutorService pool = getScanPool();
+                List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
                 for (User user : traders) {
-                    try {
-                        runScan(user);
-                    } catch (Exception e) {
-                        log.error("[scan:{} 扫描异常", user.getUsername(), e);
-                    }
+                    futures.add(pool.submit(() -> {
+                        try {
+                            runScan(user);
+                        } catch (Exception e) {
+                            log.error("[scan:{} 扫描异常", user.getUsername(), e);
+                        }
+                    }));
+                }
+                for (java.util.concurrent.Future<?> f : futures) {
+                    try { f.get(); } catch (Exception e) { /* 单个用户失败不影响整体 */ }
                 }
             } catch (Exception e) {
                 log.error("[scan] loop err", e);
