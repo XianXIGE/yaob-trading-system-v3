@@ -698,7 +698,7 @@ public class TradeEngineService {
 
         // 总持仓上限检查
         int currentPositions = openPositionMapper.findOpenByUserId(userId).size();
-        int maxTotalPositions = 10; // 最大同时持仓10个
+        int maxTotalPositions = 20; // 最大同时持仓20个(扩量)
 
         // 当前持仓币种集合
         Set<String> held = new HashSet<>();
@@ -731,7 +731,7 @@ public class TradeEngineService {
         int leverage = user.getLeverage() != null ? user.getLeverage() : 5;
 
         List<String> opened = new ArrayList<>();
-        int maxOpen = Math.min(2, Math.min(pool.size(), maxTotalPositions - currentPositions)); // [v3.4 每轮开仓2 更聚焦]
+        int maxOpen = Math.min(5, Math.min(pool.size(), maxTotalPositions - currentPositions)); // [扩量] 每轮开仓5 更激进
         if (currentPositions >= maxTotalPositions) {
             log.info("[auto-trade:{}] 已达最大持仓数{}, 跳过开仓", user.getUsername(), maxTotalPositions);
             return;
