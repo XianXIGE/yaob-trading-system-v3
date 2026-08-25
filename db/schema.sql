@@ -157,3 +157,19 @@ INSERT INTO `users`
 VALUES
   ('XJarvis', '$2a$10$JbKD/z7GMPguEuKx8GsNROKyg5OdQ8NN.oMzlB6osvTT/oLNkmR6y', 1, 1, '', '', 0)
 ON DUPLICATE KEY UPDATE `is_admin` = 1;
+
+-- -------------------------------------------------------
+-- 预置策略配置种子数据（A-G 七条默认策略，参数与 UserService.DEFAULT_PARAMS 对齐）
+-- 方案B清库重建后策略配置表为空，需预置否则前端策略页无数据、保存/开关失效
+-- -------------------------------------------------------
+INSERT INTO `strategy_configs`
+  (`user_id`, `strategy`, `enabled`, `tp_ratio`, `sl_ratio`, `params_json`, `strategy_type`, `description`)
+VALUES
+  (1,'A',1,800.00,-20.00,'{"lookback_days":66,"gain_min":36,"gain_max":50,"vol_min":10000000,"tp_ratio":800,"sl_ratio":-20}','short','做空 - 24h涨幅区间扫描，寻找高涨幅标的做空'),
+  (1,'B',0,60.00,-20.00,'{"gain_threshold":38,"vol_min":10000000,"tp_ratio":60,"sl_ratio":-20}','short','做空 - 当日涨幅突破，大幅上涨后做空'),
+  (1,'C',0,100.00,-20.00,'{"lookback_days":7,"drop_threshold":96,"vol_min":100000000,"tp_ratio":100,"sl_ratio":-20}','long','做多 - 高点回撤反弹，回落后做多'),
+  (1,'D',0,60.00,-20.00,'{"window_minutes":5,"gain_threshold":5,"vol_min":10000000,"tp_ratio":60,"sl_ratio":-20}','short','做空 - 短时急涨做空，分钟级急涨做空'),
+  (1,'E',1,1200.00,-86.00,'{"gain_30d_min":100,"ema_period":50,"pullback_min":20,"pullback_max":40,"fib_entry":0.618,"volume_mult":1.5,"rsi_threshold":30,"vol_min":10000000,"tp_ratio":1200,"sl_ratio":-86}','long','强趋势回踩：30天涨幅>100%，EMA50上方，回撤20%-40%至0.618 Fib'),
+  (1,'F',1,120.00,-20.00,'{"lookback_hours":48,"fib_long":0.618,"fib_short":0.382,"tolerance_ratio":0.1,"vol_min":30000000,"tp_ratio":120,"sl_ratio":-20}','fibonacci','1小时斐波那契位置，15分钟确认入场'),
+  (1,'G',0,10.00,-5.00,'{"ema_short":20,"ema_long":60,"vol_ratio_min":1.3,"rsi_oversold":32,"wick_body_ratio":1.5,"vol_min":10000000,"tp_ratio":10,"sl_ratio":-5}','multi','日内多空三重过滤：1h EMA20/60趋势+量比+RSI')
+ON DUPLICATE KEY UPDATE `enabled`=VALUES(`enabled`), `tp_ratio`=VALUES(`tp_ratio`), `sl_ratio`=VALUES(`sl_ratio`), `params_json`=VALUES(`params_json`), `strategy_type`=VALUES(`strategy_type`), `description`=VALUES(`description`);
