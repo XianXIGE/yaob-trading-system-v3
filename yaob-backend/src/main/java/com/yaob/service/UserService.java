@@ -130,7 +130,7 @@ public class UserService {
         DEFAULT_STRATEGY_STATES.put("G", false); // 默认关闭, 用户手动开启
     }
 
-    // 默认大盘币列表
+    // 默认自动黑名单列表（旧大盘币 v2 遗留，兼容/降级用）
     public static final List<String> DEFAULT_LARGE_CAP = List.of(
             "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
             "DOGEUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT", "BCHUSDT", "AVAXUSDT",
@@ -270,9 +270,9 @@ public class UserService {
         user.setExcludeLargeCap(newVal);
         userMapper.updateById(user);
 
-        // 同步大盘币黑名单：开启=恢复默认大盘币列表；关闭=清空 large_cap 分类（保留用户手动 manual 的）
+        // 同步自动黑名单：开启=恢复默认自动黑名单列表；关闭=清空 large_cap 分类（保留用户手动 manual 的）
         if (newVal) {
-            // 开启：恢复默认大盘币（large_cap 分类），已存在的不重复插入
+            // 开启：恢复默认自动黑名单（large_cap 分类），已存在的不重复插入
             List<ExcludedSymbol> existing = excludedSymbolMapper.findByUserIdAndCategory(userId, "large_cap");
             Set<String> existingSym = new HashSet<>();
             for (ExcludedSymbol e : existing) existingSym.add(e.getSymbol());
@@ -285,14 +285,14 @@ public class UserService {
                 excludedSymbolMapper.insert(ex);
                 existingSym.add(sym);
             }
-            log.info("用户 {} 开启排除大盘币，恢复 {} 个大盘币黑名单", user.getUsername(), DEFAULT_LARGE_CAP.size());
+            log.info("用户 {} 开启排除自动黑名单，恢复 {} 个自动黑名单", user.getUsername(), DEFAULT_LARGE_CAP.size());
         } else {
             // 关闭：清空 large_cap 分类，保留 manual 手动添加
             List<ExcludedSymbol> largeCapList = excludedSymbolMapper.findByUserIdAndCategory(userId, "large_cap");
             for (ExcludedSymbol e : largeCapList) {
                 excludedSymbolMapper.deleteById(e.getId());
             }
-            log.info("用户 {} 关闭排除大盘币，清空 {} 个大盘币黑名单", user.getUsername(), largeCapList.size());
+            log.info("用户 {} 关闭排除自动黑名单，清空 {} 个自动黑名单", user.getUsername(), largeCapList.size());
         }
     }
 

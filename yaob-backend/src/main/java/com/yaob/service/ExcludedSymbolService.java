@@ -22,7 +22,7 @@ public class ExcludedSymbolService {
     @Autowired
     private BinanceFapiService binanceFapiService;
 
-    // 默认大盘币列表 (v2 翻译) —— 保留用于历史/降级
+    // 旧大盘币默认列表 (v2 遗留) —— 保留用于兼容/降级，当前自动黑名单从 CoinGecko 市值拉取
     public static final List<String> DEFAULT_LARGE_CAP = List.of(
             "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
             "DOGEUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT", "BCHUSDT", "AVAXUSDT",
@@ -46,7 +46,7 @@ public class ExcludedSymbolService {
         Map<String, Object> result = new LinkedHashMap<>();
         // 币种市值（manual）：按市值降序
         result.put("manual", sortByMarketCap(manual));
-        // 股指市值（large_cap）：保持手动添加顺序（用户自行维护）
+        // 股指市值（large_cap）自动黑名单：保持添加顺序（用户自行维护/自动拉取的高市值币）
         result.put("large_cap", largeCap);
         result.put("all", all.stream().map(ExcludedSymbol::getSymbol).collect(Collectors.toList()));
         return result;
@@ -127,7 +127,7 @@ public class ExcludedSymbolService {
         for (ExcludedSymbol e : all) {
             existingSymbols.add(e.getSymbol());
         }
-        // 从 CoinGecko 拉取市值>阈值的币，过滤币安合约可交易，增量添加为大盘币(large_cap)
+        // 从 CoinGecko 拉取市值>阈值的币，过滤币安合约可交易，增量添加为自动黑名单(large_cap)
         // 注意：不删除任何已有记录（用户手动添加的保留，避免误删）
         Set<String> binance = Collections.emptySet();
         try {
@@ -138,7 +138,7 @@ public class ExcludedSymbolService {
         List<String> highCap = coinGeckoService.fetchHighCapSymbols(binance);
         int added = 0;
         for (String sym : highCap) {
-            if (existingSymbols.contains(sym)) continue; // 跳过已在黑名单（含大盘币/手动添加）的币
+            if (existingSymbols.contains(sym)) continue; // 跳过已在黑名单（含自动黑名单/手动添加）的币
             ExcludedSymbol ex = new ExcludedSymbol();
             ex.setUserId(userId);
             ex.setSymbol(sym);
@@ -147,7 +147,7 @@ public class ExcludedSymbolService {
             existingSymbols.add(sym);
             added++;
         }
-        log.info("恢复大盘币：市值>阈值{}/20亿 的币 {} 个，新增 {} 个",
+        log.info("恢复自动黑名单：市值>{} 的币 {} 个，新增 {} 个",
                 CoinGeckoService.MARKET_CAP_THRESHOLD, highCap.size(), added);
         return added;
     }

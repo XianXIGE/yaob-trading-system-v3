@@ -372,7 +372,8 @@ public class TradeEngineService {
 
             // 快速 tiker 过滤（无网络请求）放主线程预判，不合格的直接跳过不提交任务
             if (!sym.endsWith("USDT")) continue;
-            if (Boolean.TRUE.equals(user.getExcludeLargeCap()) && excluded.contains(sym)) continue;
+            // excluded 集合已按分类处理：手动黑名单无条件排除，自动(大市值)名单由 getExcludedSet 内按开关过滤
+            if (excluded.contains(sym)) continue;
             double qv0 = getDouble(tick, "quoteVolume");
             if (qv0 == 0 || qv0 < minVol) continue;
 
@@ -885,11 +886,19 @@ public class TradeEngineService {
 
     // ==================== Helpers ====================
 
+    /**
+     * 获取用户黑名单，按分类拆分：
+     * - manual（手动黑名单）：用户手动添加，无条件排除，不受开关控制
+     * - large_cap（自动黑名单）：市值>阈值自动过滤，受 excludeLargeCap 开关控制
+     */
     private Set<String> getExcludedSet(User user) {
         List<ExcludedSymbol> excluded = excludedSymbolMapper.findByUserId(user.getId());
         Set<String> set = new HashSet<>();
         for (ExcludedSymbol e : excluded) {
-            set.add(e.getSymbol());
+            // 手动黑名单无条件排除；自动黑名单(大市值)仍放入集合，由开关控制
+            if ("manual".equals(e.getCategory()) || !Boolean.TRUE.equals(user.getExcludeLargeCap())) {
+                set.add(e.getSymbol());
+            }
         }
         return set;
     }
