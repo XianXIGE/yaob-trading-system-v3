@@ -418,12 +418,16 @@ public class TradeEngineService {
                         sig.put("current_price", getDouble(tick, "lastPrice"));
                         double pr = getDouble(tick, "priceChangePercent") / 100.0;
                         // 大盘降权: BTC强势时做空信号降权, BTC弱势时做多信号降权(顺大盘优先)
+                        // [方案1] G策略自带多空三重过滤(EMA趋势+量价+RSI), 不参与全局顺大盘降权, 避免被过度压制
                         String dir = (String) sig.get("direction");
                         boolean btcBull = strategyDetector.isBtcBullish();
-                        if ("SHORT".equals(dir) && btcBull) {
-                            pr *= 0.5;   // BTC强势 -> 做空降权
-                        } else if ("LONG".equals(dir) && !btcBull) {
-                            pr *= 0.5;   // BTC弱势 -> 做多降权
+                        boolean isG = "G".equals(sk);
+                        if (!isG) {
+                            if ("SHORT".equals(dir) && btcBull) {
+                                pr *= 0.5;   // BTC强势 -> 做空降权
+                            } else if ("LONG".equals(dir) && !btcBull) {
+                                pr *= 0.5;   // BTC弱势 -> 做多降权
+                            }
                         }
                         sig.put("priority", pr);
                         sig.put("trigger_time", LocalDateTime.now().toString());
