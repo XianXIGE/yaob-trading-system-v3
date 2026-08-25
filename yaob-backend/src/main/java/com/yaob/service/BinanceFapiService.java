@@ -19,6 +19,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -36,7 +37,8 @@ public class BinanceFapiService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // Symbol metadata cache: symbol -> {stepSize, tickSize}
-    private Map<String, Map<String, Double>> symbolMeta = new HashMap<>();
+    // 多线程（扫描线程逐用户）并发读写，必须用 ConcurrentHashMap 避免竞态导致的结构损坏/数据不一致
+    private final Map<String, Map<String, Double>> symbolMeta = new ConcurrentHashMap<>();
 
     // 币安合约全部交易对集合缓存（用于市值过滤）
     private volatile Set<String> allSymbolsCache = null;
