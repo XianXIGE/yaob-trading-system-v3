@@ -115,6 +115,7 @@ public class UserService {
         g.put("vol_min", 1e7);        // 24h最低成交额
         g.put("tp_ratio", 10);       // 止盈10%
         g.put("sl_ratio", -5);        // 止损5%
+        g.put("risk_escalation", true); // 持仓风控升级状态机开关(默认开): 多单破EMA20->防守, 破EMA60->风险变大需保护; 空单对称
         DEFAULT_PARAMS.put("G", g);
     }
 

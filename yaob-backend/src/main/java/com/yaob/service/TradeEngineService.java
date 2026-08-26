@@ -46,6 +46,8 @@ public class TradeEngineService {
     private PositionCloseService positionCloseService;
     @Autowired
     private StrategyDetectorService strategyDetector;
+    @Autowired
+    private OperationLogMapper operationLogMapper;
 
     /** 用户并行扫描并发度（可选，application.yml 可覆盖） */
     @org.springframework.beans.factory.annotation.Value("${trade.scan.parallel:}")
@@ -579,6 +581,71 @@ public class TradeEngineService {
                     reason = "timeout";
                 }
             }
+
+            // ============ G策略持仓风控升级状态机 (risk_escalation) ============
+            // 仅在未触发平仓信号时评估, 多单: NONE->DEFENSE(破EMA20)->RISK(破EMA60); 空单对称
+            // 目的: 复现人工研判的"多单防守/多单风险变大需保护"盘中升级提示
+            if (!shouldClose && pos.getStrategy() != null
+                    && "G".equalsIgnoreCase(pos.getStrategy())) {
+                try {
+                    Map<String, Object> sp = params.get("G");
+                    boolean escalationOn = sp == null || getParamDouble(sp, "risk_escalation") != 0;
+                    if (escalationOn) {
+                        JsonNode kl = fapi.klines(sym0, "1h", 80);
+                        if (kl != null && kl.isArray() && kl.size() >= 60) {
+                            double[] closes = new double[kl.size()];
+                            for (int i = 0; i < kl.size(); i++) {
+                                closes[i] = kl.get(i).get(4).asDouble();
+                            }
+                            double e20 = emaVal(closes, 20);
+                            double e60 = emaVal(closes, 60);
+                            String curRisk = pos.getRiskState() == null ? "NONE" : pos.getRiskState();
+                            String newRisk = curRisk;
+                            String op = "";
+                            if (pos.getDirection() != null && "LONG".equalsIgnoreCase(pos.getDirection())) {
+                                // 多单: 破EMA60=风险变大; 破EMA20=防守
+                                if (last < e60) { newRisk = "RISK"; op = "多单风险变大需注意保护"; }
+                                else if (last < e20) { newRisk = "DEFENSE"; op = "多单防守"; }
+                                else { newRisk = "NONE"; }
+                            } else {
+                                // 空单对称: 站上EMA60=风险变大; 站上EMA20=防守
+                                if (last > e60) { newRisk = "RISK"; op = "空单风险变大需注意保护"; }
+                                else if (last > e20) { newRisk = "DEFENSE"; op = "空单防守"; }
+                                else { newRisk = "NONE"; }
+                            }
+                            // 状态升级/跳变时记录并推送(写入operations_log), 避免每轮重复刷
+                            if (!newRisk.equals(curRisk)) {
+                                pos.setRiskState(newRisk);
+                                openPositionMapper.updateById(pos);
+                                String actionTxt = op.isEmpty() ? ("风控状态复位 " + curRisk + "->NONE") : ("风控升级 " + curRisk + "->" + newRisk + " " + op);
+                                log.warn("[风控:{}] {} {} EMA20={} EMA60={} 现价={} | {}",
+                                        user.getUsername(), sym0, pos.getDirection(),
+                                        String.format("%.4g", e20), String.format("%.4g", e60),
+                                        String.format("%.4g", last), actionTxt);
+                                try {
+                                    OperationLog ol = new OperationLog();
+                                    ol.setOperatorId(userId);
+                                    ol.setOperator("yaob-engine");
+                                    ol.setAction("RISK_ESCALATION");
+                                    ol.setTargetUsername(user.getUsername());
+                                    ol.setDetail(sym0 + " " + pos.getDirection() + " | " + actionTxt
+                                            + " | EMA20=" + String.format("%.4g", e20)
+                                            + " EMA60=" + String.format("%.4g", e60)
+                                            + " 现价=" + String.format("%.4g", last)
+                                            + " 开仓=" + String.format("%.4g", entry));
+                                    ol.setCreatedAt(LocalDateTime.now());
+                                    operationLogMapper.insert(ol);
+                                } catch (Exception logErr) {
+                                    log.warn("[风控:{}] 记录操作日志失败: {}", user.getUsername(), logErr.getMessage());
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception escErr) {
+                    log.warn("[风控:{}] {} 状态机评估失败: {}", user.getUsername(), sym0, escErr.getMessage());
+                }
+            }
+            // ============ 风控状态机结束 ============
 
             if (shouldClose) {
                 try {

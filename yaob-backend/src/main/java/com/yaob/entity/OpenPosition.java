@@ -28,6 +28,8 @@ public class OpenPosition {
     @TableField("sl_ratio")
     private BigDecimal slRatio;
     private String status;
+    @TableField("risk_state")
+    private String riskState; // NONE/DEFENSE/RISK 持仓风控状态
     @TableField("opened_at")
     private LocalDateTime openedAt;
     @TableField("closed_at")
