@@ -103,6 +103,16 @@ public class BinanceFapiService {
         return _get("/fapi/v1/ping", null, false, null, null);
     }
 
+    /**
+     * [v3.11 止盈止损低频平价] 获取单个币种最新价（/fapi/v1/ticker/price）。
+     * 仅针对持仓币调用，避免拉全市场，币安压力小。
+     */
+    public JsonNode symbolPrice(String symbol) throws IOException, InterruptedException {
+        Map<String, String> params = new java.util.LinkedHashMap<>();
+        params.put("symbol", symbol);
+        return _get("/fapi/v1/ticker/price", params, false, null, null);
+    }
+
     public JsonNode exchangeInfo() throws IOException, InterruptedException {
         JsonNode resp = _get("/fapi/v1/exchangeInfo", null, false, null, null);
         symbolMeta.clear();

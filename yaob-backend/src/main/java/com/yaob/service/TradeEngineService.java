@@ -210,6 +210,57 @@ public class TradeEngineService {
         }
     }
 
+    /**
+     * [v3.11 止盈止损低延迟] 高频专属平价循环（15秒）：只针对 open_positions 表里持仓的币
+     * 用 symbolPrice 拉最新价判断止盈止损，避免依赖 120 秒 scanLoop 导致平价迟滞(~2.5分钟)。
+     * 只请求持仓币行情，币安压力小。
+     */
+    public void tpSlFastLoop() {
+        while (true) {
+            try {
+                List<User> traders = getActiveTraders();
+                for (User user : traders) {
+                    if (user.getBinanceApiKey() == null || user.getBinanceApiKey().isBlank()) continue;
+                    String[] keys = apiKeysOf(user);
+                    if (keys == null) continue;
+                    List<OpenPosition> openPositions = openPositionMapper.findOpenByUserId(user.getId());
+                    if (openPositions.isEmpty()) continue;
+                    try {
+                        Map<String, Map<String, Object>> tk = new HashMap<>();
+                        for (OpenPosition pos : openPositions) {
+                            String sym0 = rawSymbol(pos.getSymbol());
+                            try {
+                                JsonNode p = fapi.symbolPrice(sym0);
+                                if (p != null && p.has("price")) {
+                                    Map<String, Object> m = new HashMap<>();
+                                    m.put("symbol", sym0);
+                                    m.put("lastPrice", p.get("price").asText());
+                                    tk.put(sym0, m);
+                                }
+                            } catch (Exception e) {
+                                // 单币拉价失败跳过, 不影响其他持仓
+                            }
+                        }
+                        if (!tk.isEmpty()) {
+                            Map<String, Map<String, Object>> params = userService.getStrategyParams(user.getId());
+                            autoClosePositions(user, tk, params);
+                        }
+                    } catch (Exception e) {
+                        log.warn("[auto-close:{}] 15秒平价循环异常: {}", user.getUsername(), e.getMessage());
+                    }
+                }
+            } catch (Exception e) {
+                // ignore
+            }
+            try {
+                Thread.sleep(15_000); // 15秒高频平价
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+    }
+
     public void scanLoop() {
         while (true) {
             try {

@@ -31,17 +31,22 @@ public class StrategyDetectorService {
     /** 刷新BTC趋势状态: 拉BTCUSDT 4h K线120根(≈20天), 判断现价是否在MA120上方 */
     public void refreshBtcTrend() {
         try {
-            JsonNode k = fapi.klines("BTCUSDT", "4h", 130);
-            if (k == null || !k.isArray() || k.size() < 120) return;
+            // [v3.12 fix] BTC强弱判定 4h MA120 -> 4h MA20：
+            // 原用过钝的 MA120(约20日均价)，BTC从高位回踩初期现价仍远高于MA120，
+            // 导致 isBtcBullish() 永远 true，need_btc_strong(弱势禁做多) 永不触发，
+            // G策略在大饼回踩时疯狂开多。改用 4h MA20，回踩破线立即判弱。
+            JsonNode k = fapi.klines("BTCUSDT", "4h", 30);
+            if (k == null || !k.isArray() || k.size() < 20) return;
             double sum = 0;
-            for (int i = k.size() - 120; i < k.size(); i++) {
+            int n = Math.min(k.size(), 20);
+            for (int i = k.size() - n; i < k.size(); i++) {
                 sum += k.get(i).get(4).asDouble(); // 收盘价
             }
-            double ma120 = sum / 120;
+            double ma20 = sum / n;
             double cur = k.get(k.size() - 1).get(4).asDouble();
-            btcAboveMA20 = cur > ma120;
+            btcAboveMA20 = cur > ma20;
             btcTrendTs = System.currentTimeMillis();
-            log.info("[BTC趋势] 现价{} MA120(4h){} -> {}", String.format("%.0f", cur), String.format("%.0f", ma120), btcAboveMA20 ? "强势(线上)" : "弱势(线下)");
+            log.info("[BTC趋势] 现价{} MA20(4h){} -> {}", String.format("%.0f", cur), String.format("%.0f", ma20), btcAboveMA20 ? "强势(线上)" : "弱势(线下)");
         } catch (Exception e) {
             log.warn("[BTC趋势] 获取失败, 保持上次状态: {}", e.getMessage());
         }

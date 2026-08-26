@@ -23,7 +23,7 @@ public class ScanScheduler {
     @PostConstruct
     public void start() {
         log.info("启动妖币扫描调度器...");
-        executor = Executors.newFixedThreadPool(2, r -> {
+        executor = Executors.newFixedThreadPool(3, r -> {
             Thread t = new Thread(r, "yaob-scan-loop");
             t.setDaemon(true);
             return t;
@@ -43,6 +43,14 @@ public class ScanScheduler {
             }
             log.info("持仓刷新线程开始运行");
             tradeEngine.positionRefreshLoop();
+        });
+        // 线程3：高频止盈止损平价（15秒专属循环, 方案2）
+        executor.submit(() -> {
+            try { Thread.sleep(14_000); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); return;
+            }
+            log.info("止盈止损高频平价线程开始运行(15s)");
+            tradeEngine.tpSlFastLoop();
         });
     }
 
