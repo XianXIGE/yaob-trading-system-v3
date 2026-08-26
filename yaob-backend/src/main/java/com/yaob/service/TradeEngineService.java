@@ -48,6 +48,8 @@ public class TradeEngineService {
     private StrategyDetectorService strategyDetector;
     @Autowired
     private OperationLogMapper operationLogMapper;
+    @Autowired
+    private SimTradeService simTradeService;
 
     /** 用户并行扫描并发度（可选，application.yml 可覆盖） */
     @org.springframework.beans.factory.annotation.Value("${trade.scan.parallel:}")
@@ -264,6 +266,21 @@ public class TradeEngineService {
         }
         // 合并：有Key的在前，没Key的在后
         traders.addAll(fallback);
+
+        // [B1 模拟盘] 确保独立模拟账户(sim_g_paper)始终进入扫描，作为实时跟单模拟盘的宿主
+        // （模拟账户无真实API Key, runScan 内会走 SimTradeService.simulate, 不开真实单）
+        boolean foundSim = false;
+        for (User u : traders) {
+            if (u.getId() != null && u.getId() == SimTradeService.SIM_USER_ID) { foundSim = true; break; }
+        }
+        if (!foundSim) {
+            for (User u : all) {
+                if (u.getId() != null && u.getId() == SimTradeService.SIM_USER_ID) {
+                    traders.add(u);
+                    break;
+                }
+            }
+        }
         return traders;
     }
 
@@ -272,6 +289,26 @@ public class TradeEngineService {
     @SuppressWarnings("unchecked")
     public void runScan(User user) {
         Long userId = user.getId();
+
+        // [B1 模拟盘] 模拟账户(auto_trade_enabled=0, 无真实API Key)只跑 G 策略模拟交易，不触碰真实资金
+        if (userId != null && userId == SimTradeService.SIM_USER_ID) {
+            log.info("[SimG] 模拟盘扫描开始 (user_id={})", userId);
+            Map<String, Map<String, Object>> simParams = userService.getStrategyParams(userId);
+            Map<String, Object> gParams = simParams.get("G") != null ? simParams.get("G") : simParams.get("g");
+            try {
+                List<Map<String, Object>> simTickers = fapi.allTickers();
+                Map<String, Map<String, Object>> tickers = new HashMap<>();
+                for (Map<String, Object> t : simTickers) {
+                    Object sym = t.get("symbol");
+                    if (sym != null) tickers.put(sym.toString(), t);
+                }
+                simTradeService.simulate(tickers, gParams);
+            } catch (Exception e) {
+                log.error("[SimG] 模拟盘 runScan 异常: {}", e.getMessage());
+            }
+            return;
+        }
+
         RuntimeState rt = getRuntime(userId);
         Map<String, Map<String, Object>> params = userService.getStrategyParams(userId);
         Map<String, Boolean> states = userService.getStrategyStates(userId);
