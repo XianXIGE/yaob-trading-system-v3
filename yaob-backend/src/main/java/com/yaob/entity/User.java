@@ -37,6 +37,8 @@ public class User {
     private Integer leverage;
     @TableField("exclude_large_cap")
     private Boolean excludeLargeCap;
+    @TableField("circuit_breaker_override")
+    private Boolean circuitBreakerOverride; // 手动强制关闭熔断(1=解除熔断恢复交易)
     @TableField("created_at")
     private LocalDateTime createdAt;
     @TableField("updated_at")

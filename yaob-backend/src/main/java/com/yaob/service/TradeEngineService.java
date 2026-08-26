@@ -316,7 +316,8 @@ public class TradeEngineService {
             double dailyLoss = getDailyLoss(user, rt);
             rt.dailyPnl = dailyLoss;
             double totalAssets = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
-            rt.circuitBreaker = totalAssets > 0 && dailyLoss <= -(totalAssets * DAILY_LOSS_CIRCUIT_BREAKER_RATIO);
+            rt.circuitBreaker = !Boolean.TRUE.equals(user.getCircuitBreakerOverride())
+                    && totalAssets > 0 && dailyLoss <= -(totalAssets * DAILY_LOSS_CIRCUIT_BREAKER_RATIO);
 
             // 自动交易
             if (Boolean.TRUE.equals(user.getAutoTradeEnabled())
@@ -562,11 +563,42 @@ public class TradeEngineService {
             // 触发止盈或止损
             boolean shouldClose = false;
             String reason = null;
-            if (tp > 0 && ratio >= tp) {
+
+            // [v3.6 G策略动态参考位优先] 当持仓带 defense_price/target_price 时，用结构性价位替代固定百分比止盈止损：
+            //   止损：现价跌破/升破 防守位(defense)；止盈：现价触及 目标位(target)。
+            //   参考位缺失或与方向不符时，自动退回固定 tp_ratio/sl_ratio（下方原有分支兜底）。
+            boolean isLongPos = pos.getDirection() != null && "LONG".equalsIgnoreCase(pos.getDirection());
+            boolean gDynamic = pos.getStrategy() != null && "G".equalsIgnoreCase(pos.getStrategy())
+                    && pos.getDefensePrice() != null && pos.getTargetPrice() != null
+                    && pos.getDefensePrice().doubleValue() > 0 && pos.getTargetPrice().doubleValue() > 0;
+            if (gDynamic) {
+                double defP = pos.getDefensePrice().doubleValue();
+                double tgtP = pos.getTargetPrice().doubleValue();
+                if (isLongPos) {
+                    if (last <= defP) { // 多单跌破防守位 -> 止损
+                        log.info("[auto-close:{}] {} G动态止损 现价{}<={} 防守位", user.getUsername(), sym0, fmt(last), fmt(defP));
+                        shouldClose = true; reason = "sl";
+                    } else if (last >= tgtP) { // 多单触及目标位 -> 止盈
+                        log.info("[auto-close:{}] {} G动态止盈 现价{}>={} 目标位", user.getUsername(), sym0, fmt(last), fmt(tgtP));
+                        shouldClose = true; reason = "tp";
+                    }
+                } else {
+                    if (last >= defP) { // 空单升破防守位 -> 止损
+                        log.info("[auto-close:{}] {} G动态止损 现价{}>={} 防守位", user.getUsername(), sym0, fmt(last), fmt(defP));
+                        shouldClose = true; reason = "sl";
+                    } else if (last <= tgtP) { // 空单触及目标位 -> 止盈
+                        log.info("[auto-close:{}] {} G动态止盈 现价{}<={} 目标位", user.getUsername(), sym0, fmt(last), fmt(tgtP));
+                        shouldClose = true; reason = "tp";
+                    }
+                }
+            }
+
+            // 固定比例止盈/止损（G策略无有效参考位时兜底，A-F 策略一直走这里）
+            if (!shouldClose && tp > 0 && ratio >= tp) {
                 log.info("[auto-close:{}] {} 止盈 ratio={}% >= tp={}", user.getUsername(), sym0, String.format("%.2f", ratio), tp);
                 shouldClose = true;
                 reason = "tp";
-            } else if (sl < 0 && ratio <= sl) {
+            } else if (!shouldClose && sl < 0 && ratio <= sl) {
                 log.info("[auto-close:{}] {} 止损 ratio={}% <= sl={}", user.getUsername(), sym0, String.format("%.2f", ratio), sl);
                 shouldClose = true;
                 reason = "sl";
@@ -767,7 +799,9 @@ public class TradeEngineService {
         double dailyLoss = getDailyLoss(user, rt);
         double totalAssets = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
         double maxDailyLoss = totalAssets * DAILY_LOSS_CIRCUIT_BREAKER_RATIO; // 2% 熔断
-        if (totalAssets > 0 && dailyLoss <= -maxDailyLoss) {
+        // [v3.6] 手动熔断解除开关 circuit_breaker_override：管理员可临时强制解除熔断恢复交易（1=恢复）。
+        boolean breakerOverride = Boolean.TRUE.equals(user.getCircuitBreakerOverride());
+        if (!breakerOverride && totalAssets > 0 && dailyLoss <= -maxDailyLoss) {
             log.warn("[auto-trade:{}] 单日亏损 {}U 超过熔断线 {}U, 停止开仓", user.getUsername(), String.format("%.2f", dailyLoss), String.format("%.2f", -maxDailyLoss));
             return;
         }
@@ -930,6 +964,17 @@ public class TradeEngineService {
                 op.setSlRatio(BigDecimal.valueOf(slRatio));
                 op.setStatus("OPEN");
                 op.setOpenedAt(LocalDateTime.now());
+
+                // [v3.6 G策略动态参考位] 仅G策略开仓时持久化 signal 计算出的参考位：
+                //   防守位(defense)=结构性止损；目标位(target)=结构性止盈；
+                //   保护位(protect)=入场保本移动止损基准；回踩减仓位(reduce)=减仓观察位。
+                //   参考位缺失/无效时该字段写 null，引擎会退回固定 tp_ratio/sl_ratio。
+                if ("G".equalsIgnoreCase(strategy)) {
+                    op.setDefensePrice(optDec(cand, "defense_price"));
+                    op.setTargetPrice(optDec(cand, "target_price"));
+                    op.setProtectPrice(optDec(cand, "protect_price"));
+                    op.setReducePrice(optDec(cand, "reduce_price"));
+                }
                 openPositionMapper.insert(op);
 
                 held.add(sym0);
@@ -1003,6 +1048,19 @@ public class TradeEngineService {
     }
 
     // ==================== Helpers ====================
+
+    /** [v3.6] 从 signal map 安全读取参考位(decimal), 缺失/无效返回 null(引擎退回固定比例) */
+    private BigDecimal optDec(Map<String, Object> m, String key) {
+        try {
+            Object v = m.get(key);
+            if (v == null) return null;
+            double d = Double.parseDouble(v.toString());
+            if (!Double.isFinite(d) || d <= 0) return null;
+            return BigDecimal.valueOf(d);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     /** 保留两位小数的金额格式化 */
     private static String fmt(double v) {

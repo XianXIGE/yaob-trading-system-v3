@@ -41,4 +41,14 @@ public class OpenPosition {
     private BigDecimal pnl;
     @TableField("pnl_ratio")
     private BigDecimal pnlRatio;
+
+    // [v3.6] G策略参考位（动态计算，替代固定百分比止盈止损）
+    @TableField("defense_price")
+    private BigDecimal defensePrice;      // 参考防守位(止损)
+    @TableField("target_price")
+    private BigDecimal targetPrice;       // 参考目标位(止盈)
+    @TableField("protect_price")
+    private BigDecimal protectPrice;      // 保护位(移动止损)
+    @TableField("reduce_price")
+    private BigDecimal reducePrice;       // 回踩减仓位
 }

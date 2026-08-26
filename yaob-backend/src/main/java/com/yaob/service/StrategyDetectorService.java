@@ -474,12 +474,62 @@ public class StrategyDetectorService {
                 sig.put("reason", subSignal + ":" + reason);
                 sig.put("defense", defense);
                 sig.put("target", target);
+
+                // [v3.6] 数值化参考位（动态计算，替代固定百分比止盈止损）：
+                //   防守位 = 结构性止损位；目标位 = 结构性目标位；
+                //   保护位 = 入场后移动止损基准（保本）；回踩减仓位 = 减仓观察位。
+                // 做多信号：
+                //   防守位取“前低lo24”与“EMA60”中离现价较近者（止损不过深）
+                //   目标位取 24h 高 hi24（有成交量确认时更可靠）
+                // 做空信号：
+                //   防守位取“前高hi24”与“EMA60”中离现价较近者
+                //   目标位取 24h 低 lo24
+                boolean isLong = "LONG".equals(direction);
+                double defensePrice;
+                double targetPrice;
+                if (isLong) {
+                    // 防守：lo24 与 EMA60 取较高者(离现价更近)”
+                    double cand1 = lo24;      // 创新低无条件走
+                    double cand2 = Math.min(e60, cur * 0.92); // 超跌反弹防守用 EMA60
+                    defensePrice = Math.max(cand1, cand2);
+                    // 目标：hi24 为结构性压力（有量能确认更可靠）
+                    targetPrice = hi24;
+                } else {
+                    // 防守：hi24 与 EMA60 取较低者(离现价更近)
+                    double cand1 = hi24;
+                    double cand2 = e60;
+                    defensePrice = Math.min(cand1, cand2);
+                    // 目标：lo24 为结构性支撑
+                    targetPrice = lo24;
+                }
+                // 有效性校验：防守/目标必须与方向一致且远离现价，否则退化用 ATR 缓冲
+                if (isLong) {
+                    if (defensePrice <= 0 || defensePrice >= cur) defensePrice = cur * (1 - 0.015); // 兜底-1.5%
+                    if (targetPrice <= cur) targetPrice = cur * (1 + 0.06);                           // 兜底+6%
+                } else {
+                    if (defensePrice <= 0 || defensePrice <= cur) defensePrice = cur * (1 + 0.015); // 兜底+1.5%
+                    if (targetPrice >= cur) targetPrice = cur * (1 - 0.06);                           // 兜底-6%
+                }
+                // 保护位：入场后移动止损的初始基准（保本±小额缓冲），平仓引擎按浮盈上移
+                double protectPrice = isLong ? cur * (1 - 0.005) : cur * (1 + 0.005);
+                // 回踩减仓位：多买回踩 EMA20、空反弹至 EMA20
+                double reducePrice = isLong ? Math.min(e20, cur) : Math.max(e20, cur);
+
+                sig.put("defense_price", round4(defensePrice));
+                sig.put("target_price", round4(targetPrice));
+                sig.put("protect_price", round4(protectPrice));
+                sig.put("reduce_price", round4(reducePrice));
                 return sig;
             }
         } catch (Exception e) {
             // klines获取失败, skip
         }
         return null;
+    }
+
+    /** [v3.6] 保留4位小数(double -> double) */
+    private static double round4(double v) {
+        return Math.round(v * 10000.0) / 10000.0;
     }
     /** [v3.4] 读取布尔参数, 缺省返回 defVal */
     private boolean getParamBool(Map<String, Object> p, String key, boolean defVal) {
