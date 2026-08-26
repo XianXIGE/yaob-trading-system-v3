@@ -202,7 +202,7 @@ public class TradeEngineService {
                 // ignore
             }
             try {
-                Thread.sleep(10_000); // 10秒刷新一次
+                Thread.sleep(30_000); // [v3.8.1 防封] 30秒刷新一次(原10秒)——降低币安账户接口请求频率, 防止IP再被风控封禁
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
