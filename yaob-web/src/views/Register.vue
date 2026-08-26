@@ -1,7 +1,7 @@
 <template>
   <div class="register-page">
     <div class="register-card">
-      <h2 class="register-title">妖币交易系统 V3.6</h2>
+      <h2 class="register-title">妖币交易系统 V3.6.1</h2>
       <p class="register-subtitle">注册账号</p>
       <el-form ref="formRef" :model="form" :rules="rules" @submit.prevent="handleRegister">
         <el-form-item prop="username">

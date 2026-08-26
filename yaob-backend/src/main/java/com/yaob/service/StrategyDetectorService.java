@@ -411,6 +411,12 @@ public class StrategyDetectorService {
             boolean longAllowed  = (!longNeedsStrong || btcBullish) && coinBull4h;
             boolean shortAllowed = (!shortNeedsWeak  || !btcBullish) && !coinBull4h;
 
+            // [v3.6.1 立昕见影止血] allow_long 开关：缺省 false 默认关闭 G 多头信号。
+            // 实盘归因：G 多头(关注/回调/超跌反弹做多)在 20x+紧止损 下 61% 触发止损，
+            // 累计 -49U 是全策略唯一稳定亏损源(空头基本打平)。故默认禁多，只留空头 D/E/F。
+            boolean allowLong = getParamBool(p, "allow_long", false);
+            longAllowed = longAllowed && allowLong;
+
             String subSignal = null;
             String direction = null;
             String defense = null;
