@@ -71,6 +71,7 @@ public class StrategyDetectorService {
             case "E": return checkE(sym, tick, p);
             case "F": return checkF(sym, tick, p);
             case "G": return checkG(sym, tick, p);
+            case "H": return checkH(sym, tick, p);
             default: return null;
         }
     }
@@ -528,6 +529,132 @@ public class StrategyDetectorService {
             // klines获取失败, skip
         }
         return null;
+    }
+
+    /**
+     * H: BTC/ETH 专属策略（只绑定 BTCUSDT/ETHUSDT），完全按 4h 多空分水岭分析：
+     *   分水岭 = 4h EMA20；趋势参考 = 4h EMA60。防守/目标位动态取 4h EMA，不写死。
+     *
+     * 多单方向（回调/超跌做多）：
+     *   - 回调做多：现价在 4h EMA20 上方（分水岭之上/偏多），回踩 4h EMA20 企稳（最后K转阳）→ 轻仓试多
+     *     · 防守位 = 4h EMA60 与当前价下方 EMA 取较近（跌破走）
+     *     · 目标位 = 4h 区间高位（前高/1.06基准）
+     *   - 超跌反弹：急跌至 4h EMA60 附近缩量转阳 → 博反弹（防守 EMA60×0.98）
+     *
+     * 空单方向（反弹做空，不主动追空）：
+     *   - 现价跌破 4h EMA20（分水岭之下/偏空）且反抽 EMA20 滞涨 → 反弹做空
+     *     · 防守位 = EMA20×1.03（上方），目标位 = 4h 前低
+     *   - 冲高急拉至 EMA20×1.03 上方滞涨（长上影+阴线）→ 短线反手做空
+     */
+    private Map<String, Object> checkH(String sym, Map<String, Object> tick, Map<String, Object> p) {
+        // 只绑定 BTC/ETH，其余币一律跳过
+        if (!"BTCUSDT".equals(sym) && !"ETHUSDT".equals(sym)) return null;
+
+        double cur = getDouble(tick, "lastPrice");
+        if (cur <= 0) return null;
+        int emaShort = (int) getParamDouble(p, "ema_short");   // 20
+        int emaLong  = (int) getParamDouble(p, "ema_long");    // 60
+
+        try {
+            // 4h K线：分水岭(EMA20) + 趋势(EMA60)
+            JsonNode k4 = fapi.klines(sym, "4h", 120);
+            if (k4 == null || !k4.isArray() || k4.size() < emaLong + 10) return null;
+            int n = k4.size();
+            double[] c4 = new double[n];
+            double[] o4 = new double[n];
+            double[] h4 = new double[n];
+            double[] l4 = new double[n];
+            for (int i = 0; i < n; i++) {
+                c4[i] = k4.get(i).get(4).asDouble();
+                o4[i] = k4.get(i).get(1).asDouble();
+                h4[i] = k4.get(i).get(2).asDouble();
+                l4[i] = k4.get(i).get(3).asDouble();
+            }
+            double e20 = emaVal(c4, emaShort);  // 4h 分水岭
+            double e60 = emaVal(c4, emaLong);   // 4h 趋势
+
+            // 4h 区间高低（最近24根，约24h）
+            double hi4 = 0, lo4 = Double.MAX_VALUE;
+            int from = Math.max(0, n - 24);
+            for (int i = from; i < n; i++) {
+                if (h4[i] > hi4) hi4 = h4[i];
+                if (l4[i] < lo4) lo4 = l4[i];
+            }
+            if (lo4 == Double.MAX_VALUE) lo4 = e60;
+
+            // 最后一根 4h 是否转阳（企稳确认）
+            int li = n - 2; // 最近已收盘K
+            boolean greenBar = c4[li] > o4[li];
+            boolean redBar = c4[li] < o4[li];
+            double lastLow = l4[li];
+            double lastHigh = h4[li];
+            double lastClose = c4[li];
+
+            // 触 4h EMA20：现价回踩到分水岭附近（±1%容差）
+            boolean touch20 = cur <= e20 * 1.01 && cur >= e20 * 0.99;
+            // 是否深跌破 EMA60（趋势破坏）
+            boolean below60 = cur < e60;
+
+            String direction = null;
+            String subSignal = null;
+            String reason = null;
+
+            if (cur >= e20) {
+                // ===== 分水岭上方：偏多区间 =====
+                if (touch20 && greenBar && !below60) {
+                    // 回调 EMA20 企稳 → 回调做多
+                    direction = "LONG";
+                    subSignal = "回调企稳做多(4hEMA20)";
+                } else if (cur <= e60 * 1.02 && greenBar) {
+                    // 回踩至 4h EMA60 附近缩量转阳 → 超跌反弹
+                    direction = "LONG";
+                    subSignal = "超跌反弹做多(4hEMA60)";
+                }
+            } else {
+                // ===== 分水岭下方：偏空区间（不主动追空，仅反抽滞涨做空） =====
+                boolean bearish = e20 < e60 && cur < e20;
+                boolean pullbackStall = cur >= e20 * 0.97 && cur <= e20; // 反抽至EMA20滞涨
+                boolean upperWick = lastHigh - lastClose >= 1.0 * Math.max(lastClose - o4[li], 1e-9)
+                        && redBar; // 长上影+阴线=冲高回落
+                if (pullbackStall && (redBar || upperWick)) {
+                    direction = "SHORT";
+                    subSignal = "反抽分水岭做空(滞涨)";
+                }
+            }
+
+            if (direction == null) return null;
+
+            // 动态参考位（4h EMA 口径，不写死）
+            Map<String, Object> sig = new LinkedHashMap<>();
+            sig.put("strategy", "H");
+            sig.put("direction", direction);
+            sig.put("reason", subSignal);
+            sig.put("defense", direction.equals("LONG") ? String.format("4hEMA60 %.4g", e60) : String.format("4hEMA20x1.03 %.4g", e20 * 1.03));
+            sig.put("target", direction.equals("LONG") ? String.format("%.4g", Math.max(hi4, cur * 1.03)) : String.format("%.4g", lo4));
+
+            if (direction.equals("LONG")) {
+                // 防守：EMA60 与下方 2% 缓冲取较高（近价）；目标：4h 前高或 +3%
+                double defensePrice = Math.max(e60, cur * 0.98);
+                if (defensePrice >= cur) defensePrice = cur * (1 - 0.015); // 兜底-1.5%
+                double targetPrice = Math.max(hi4, cur * 1.03);
+                sig.put("defense_price", round4(defensePrice));
+                sig.put("target_price", round4(targetPrice));
+                sig.put("protect_price", round4(cur * 0.995));
+                sig.put("reduce_price", round4(Math.min(e20, cur)));
+            } else {
+                // 防守：EMA20×1.03 上方；目标：4h 前低
+                double defensePrice = Math.min(e20 * 1.03, cur * 1.015);
+                if (defensePrice <= cur) defensePrice = cur * (1 + 0.015); // 兜底+1.5%
+                double targetPrice = lo4;
+                sig.put("defense_price", round4(defensePrice));
+                sig.put("target_price", round4(targetPrice));
+                sig.put("protect_price", round4(cur * 1.005));
+                sig.put("reduce_price", round4(Math.max(e20, cur)));
+            }
+            return sig;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** [v3.6] 保留4位小数(double -> double) */

@@ -30,6 +30,7 @@ public class StrategyService {
         STRATEGY_TYPES.put("E", "多");
         STRATEGY_TYPES.put("F", "斐波那契双向");
         STRATEGY_TYPES.put("G", "日内多空三重过滤");
+        STRATEGY_TYPES.put("H", "BTC/ETH 4h分水岭双向");
     }
 
     @SuppressWarnings("unchecked")

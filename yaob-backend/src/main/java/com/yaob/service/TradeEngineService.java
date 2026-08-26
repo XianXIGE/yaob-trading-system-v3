@@ -447,7 +447,7 @@ public class TradeEngineService {
             // 提交并行检测任务（每币独立，无共享可变状态）
             futures.add(detectPool.submit(() -> {
                 List<Map<String, Object>> localSig = new ArrayList<>();
-                for (String sk : new String[]{"A", "B", "C", "D", "E", "F", "G"}) {
+                for (String sk : new String[]{"A", "B", "C", "D", "E", "F", "G", "H"}) {
                     if (!Boolean.TRUE.equals(states.get(sk))) continue;
                     Map<String, Object> p = params.get(sk);
                     if (p == null) continue;

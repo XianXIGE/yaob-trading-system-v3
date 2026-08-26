@@ -117,6 +117,15 @@ public class UserService {
         g.put("sl_ratio", -5);        // 止损5%
         g.put("risk_escalation", true); // 持仓风控升级状态机开关(默认开): 多单破EMA20->防守, 破EMA60->风险变大需保护; 空单对称
         DEFAULT_PARAMS.put("G", g);
+
+        // H: BTC/ETH 专属策略 (只绑定 BTCUSDT/ETHUSDT，4h 多空分水岭动态 EMA 参考位)
+        Map<String, Object> h = new LinkedHashMap<>();
+        h.put("ema_short", 20);       // 4h 分水岭 EMA
+        h.put("ema_long", 60);        // 4h 趋势参考 EMA
+        h.put("vol_min", 1e7);        // 24h最低成交额
+        h.put("tp_ratio", 6);         // 止盈6%(参考位优先，此为兑底)
+        h.put("sl_ratio", -3);        // 止损3%(参考位优先，此为兑底)
+        DEFAULT_PARAMS.put("H", h);
     }
 
     // 默认策略启用状态: A=true, B=false, C=false, D=false, E=true, F=true
@@ -129,6 +138,7 @@ public class UserService {
         DEFAULT_STRATEGY_STATES.put("E", true);
         DEFAULT_STRATEGY_STATES.put("F", true);
         DEFAULT_STRATEGY_STATES.put("G", false); // 默认关闭, 用户手动开启
+        DEFAULT_STRATEGY_STATES.put("H", false); // 默认关闭, 用户手动开启
     }
 
     // 默认自动黑名单列表（旧大盘币 v2 遗留，兼容/降级用）

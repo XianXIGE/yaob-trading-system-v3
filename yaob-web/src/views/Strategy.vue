@@ -121,6 +121,7 @@ const builtinDesc: Record<string, { type: string; description: string }> = {
   e: { type: 'long', description: '强趋势回踩：30天涨幅>100%，EMA50上方，回撤20%-40%至0.618 Fib' },
   f: { type: 'fibonacci', description: '1小时斐波那契位置，15分钟确认入场' },
   g: { type: 'multi', description: '日内多空三重过滤：1h EMA20/60趋势+量比+RSI，6子信号(关注做多/回调做多/超跌反弹/关注做空/反弹做空/冲高回落做空)，4h同向评级A/B' },
+  h: { type: 'multi', description: 'BTC/ETH专属：只绑BTCUSDT/ETHUSDT，4h多空分水岭(EMA20)，回调/超跌做多，反抽分水岭滞涨做空，防守/目标动态取4h EMA' },
 }
 
 // 自定义策略描述存储
@@ -199,6 +200,13 @@ const paramDefs: Record<string, { label: string; field: string; step?: number; m
     { label: '顺势最低量比', field: 'vol_ratio_min', step: 0.1, min: 1, unit: '倍' },
     { label: '超跌RSI阈值', field: 'rsi_oversold', step: 1, min: 0, max: 100, unit: '' },
     { label: '上影/实体比', field: 'wick_body_ratio', step: 0.1, min: 0, unit: '倍' },
+    { label: '24h成交额下限', field: 'vol_min', step: 1000000, min: 0, unit: 'USDT' },
+    { label: '止盈比例', field: 'tp_ratio', step: 1, min: 0, unit: '%' },
+    { label: '止损比例', field: 'sl_ratio', step: 1, unit: '%' },
+  ],
+  h: [
+    { label: '4h分水岭EMA', field: 'ema_short', step: 1, min: 1, unit: '根' },
+    { label: '4h趋势EMA', field: 'ema_long', step: 1, min: 1, unit: '根' },
     { label: '24h成交额下限', field: 'vol_min', step: 1000000, min: 0, unit: 'USDT' },
     { label: '止盈比例', field: 'tp_ratio', step: 1, min: 0, unit: '%' },
     { label: '止损比例', field: 'sl_ratio', step: 1, unit: '%' },
