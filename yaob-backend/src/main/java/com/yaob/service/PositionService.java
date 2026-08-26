@@ -273,10 +273,11 @@ public class PositionService {
                 return m;
             });
             d.put("trades", (int) d.get("trades") + 1);
-            if (h.getPnlRatio() != null) {
-                double pnl = (double) d.get("pnl") + h.getPnlRatio().doubleValue();
+            if (h.getPnl() != null) {
+                // [v3.5 修复] 正确用 USDT 金额 pnl 累加(而非 pnlRatio 百分比)，与历史列表/缓存表口径统一
+                double pnl = (double) d.get("pnl") + h.getPnl().doubleValue();
                 d.put("pnl", pnl);
-                if (h.getPnlRatio().compareTo(BigDecimal.ZERO) > 0) {
+                if (h.getPnl().compareTo(BigDecimal.ZERO) > 0) {
                     d.put("wins", (int) d.get("wins") + 1);
                 }
             }
@@ -308,10 +309,11 @@ public class PositionService {
                 return m;
             });
             b.put("trades", (int) b.get("trades") + 1);
-            if (h.getPnlRatio() != null) {
-                double pnl = (double) b.get("pnl") + h.getPnlRatio().doubleValue();
+            if (h.getPnl() != null) {
+                // [v3.5 修复] pnlRatio 百分比 -> pnl 金额
+                double pnl = (double) b.get("pnl") + h.getPnl().doubleValue();
                 b.put("pnl", pnl);
-                if (h.getPnlRatio().compareTo(BigDecimal.ZERO) > 0) {
+                if (h.getPnl().compareTo(BigDecimal.ZERO) > 0) {
                     b.put("wins", (int) b.get("wins") + 1);
                 }
             }

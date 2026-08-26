@@ -79,9 +79,10 @@ public class StatsService {
                 return m;
             });
             st.put("trades", (int) st.get("trades") + 1);
-            if (h.getPnlRatio() != null) {
-                st.put("pnl_sum", (double) st.get("pnl_sum") + h.getPnlRatio().doubleValue());
-                if (h.getPnlRatio().compareTo(BigDecimal.ZERO) > 0) {
+            if (h.getPnl() != null) {
+                // [v3.5 修复] pnlRatio 百分比 -> pnl 金额，与 trade_history/缓存表口径统一
+                st.put("pnl_sum", (double) st.get("pnl_sum") + h.getPnl().doubleValue());
+                if (h.getPnl().compareTo(BigDecimal.ZERO) > 0) {
                     st.put("wins", (int) st.get("wins") + 1);
                 }
                 if ("tp".equals(h.getCloseReason())) st.put("tp", (int) st.get("tp") + 1);
