@@ -399,8 +399,7 @@ public class StrategyDetectorService {
             double lastVolRatio = prevAvgVol > 0 ? lastVol / prevAvgVol : 1.0;
 
             // 判断6种子信号(按优先级)
-            boolean bullish = e20 > e60 && cur > e60;
-            boolean bearish = e20 < e60 && cur < e60;
+            boolean bearish = e20 < e60 && cur < e60; // 空单对称
             boolean isGreenBar = lastClose > lastOpen; // 阳线
             boolean isRedBar = lastClose < lastOpen;   // 阴线
 
@@ -417,30 +416,34 @@ public class StrategyDetectorService {
             String target = null;
             String reason = null;
 
-            // A. 关注做多: close>EMA20>EMA60 + 放量(量比>=volRatioMin) + 阳线 (需做多许可)
-            if (longAllowed && cur > e20 && e20 > e60 && lastVolRatio >= volRatioMin && isGreenBar) {
-                subSignal = "关注做多";
-                direction = "LONG";
-                defense = String.format("EMA20 %.4g / EMA60 %.4g", e20, e60);
-                target = String.format("%.4g", hi24);
-                reason = String.format("顺势放量阳线(量比%.1f) 站上EMA20>EMA60", lastVolRatio);
-            }
-            // B. 回调做多: 趋势偏强(EMA20>EMA60) + 缩量回调至EMA20下方 (需做多许可)
-            else if (longAllowed && bullish && cur < e20 && lastVolRatio < 1.0) {
-                subSignal = "回调做多";
+            // [v3.6.2] 多头入场改为“回调企稳”，不再追高：
+            // 实盘归因：原 A(放量阳线追突破) 是追高主源，在 20x 下 61% 被回调扫损，累计 -49U。
+            // 故多头只允许【趋势向上(EMA20>EMA60) + 回踩不破EMA60 + 缩量回调 + 最后一根转阳(企稳确认)】。
+            // 有效避免高位接盘，也避免下跌途中接飞刀。
+            boolean trendUp = e20 > e60;            // 趋势向上
+            boolean rejectedLow = cur >= e60 * 0.98; // 现价未深跌破EMA60(98%以上)
+            boolean pullback = cur <= e20 * 1.01 && lastVolRatio < 1.2; // 回踩EMA20附近且未显著放量
+            boolean stabilized = isGreenBar;         // 最后一根收盘转阳 = 企稳
+
+            // A. 回调企稳做多: 趋势向上 + 缩量回踩EMA20附近 + 转阳企稳 (需做多许可)
+            if (longAllowed && trendUp && pullback && rejectedLow && stabilized) {
+                subSignal = "回调企稳做多";
                 direction = "LONG";
                 defense = String.format("EMA60 %.4g", e60);
                 target = String.format("%.4g", hi24);
-                reason = String.format("趋势偏强+缩量回调(量比%.1f) 至EMA20下方", lastVolRatio);
+                reason = String.format("趋势向上+缩量回踩EMA20(量比%.1f)+转阳企稳", lastVolRatio);
             }
-            // C. 超跌反弹: RSI<oversold + 转阳 + 深度偏离EMA60 (需做多许可，弱势禁抄底接飞刀)
-            else if (longAllowed && r < rsiOversold && isGreenBar && cur < e60 * 0.92) {
-                subSignal = "超跌反弹";
+            // B. 深回踩EMA60企稳做多: 趋势向上 + 回踩到EMA60附近(不破) + 转阳企稳 (降级到EMA60) 
+            else if (longAllowed && trendUp && cur < e20 * 0.98 && cur >= e60 * 0.98
+                    && lastVolRatio < 1.0 && stabilized) {
+                subSignal = "深回踩企稳做多";
                 direction = "LONG";
-                defense = String.format("%.4g(再创新低无条件走)", lo24);
-                target = String.format("EMA60 %.4g", e60);
-                reason = String.format("RSI=%.0f 超跌转阳 偏离EMA60 %.1f%%", r, (cur / e60 - 1) * 100);
+                defense = String.format("EMA60下方支撑 %.4g", e60 * 0.97);
+                target = String.format("%.4g", hi24);
+                reason = String.format("回踩EMA60企稳(量比%.1f)未破位", lastVolRatio);
             }
+            // C. (已去除) 原“超跌反弹做多”为接飞刀式入场，与回调企稳相洋不再触发。
+            //    真正超跌转阳且趋势仍向上(rejectedLow)时由 A/B 覆盖；趋势向下则不抄底。
             // D. 关注做空: close<EMA20<EMA60 + 放量(量比>=volRatioMin) + 阴线 (需做空许可)
             else if (shortAllowed && cur < e20 && e20 < e60 && lastVolRatio >= volRatioMin && isRedBar) {
                 subSignal = "关注做空";
