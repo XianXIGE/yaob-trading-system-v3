@@ -18,7 +18,7 @@
       <div class="logo-area">
         <div class="logo-icon">🪙</div>
         <h2 class="login-title">妖币交易系统</h2>
-        <p class="login-version">V3.0 · 智能合约交易</p>
+        <p class="login-version">V3.5 · 智能合约交易</p>
       </div>
 
       <el-form ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
