@@ -631,7 +631,21 @@ public class TradeEngineService {
             }
 
             // 固定比例止盈/止损（G策略无有效参考位时兜底，A-F 策略一直走这里）
-            if (!shouldClose && tp > 0 && ratio >= tp) {
+            // [v3.8 价格止损] G 策略统一用“价格跌幅”口径止损（用户直觉：价格跌到 sl% 才平），
+            //   避免 20x 杠杆下保证金 ratio 达 -15% 其实价格只跌 0.75% 就被无脑扫损。
+            //   A-F 策略维持原保证金收益率口径（ratio）不变。
+            boolean isGStrat = pos.getStrategy() != null && "G".equalsIgnoreCase(pos.getStrategy());
+            if (!shouldClose && isGStrat && sl < 0 && entry > 0) {
+                // 价格口径涨跌幅: 多单=(last-entry)/entry, 空单=(entry-last)/entry
+                double pricePct = isLongPos ? (last - entry) / entry * 100 : (entry - last) / entry * 100;
+                if (pricePct <= sl) { // 价格跌幅达到 sl%(如 -15) 才止损
+                    log.info("[auto-close:{}] {} G价格止损 价格跌幅={}% <= sl={}% (entry={},last={})",
+                            user.getUsername(), sym0, String.format("%.2f", pricePct), sl,
+                            String.format("%.6g", entry), String.format("%.6g", last));
+                    shouldClose = true;
+                    reason = "sl";
+                }
+            } else if (!shouldClose && tp > 0 && ratio >= tp) {
                 log.info("[auto-close:{}] {} 止盈 ratio={}% >= tp={}", user.getUsername(), sym0, String.format("%.2f", ratio), tp);
                 shouldClose = true;
                 reason = "tp";
