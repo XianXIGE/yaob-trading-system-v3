@@ -10,7 +10,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -178,7 +177,9 @@ public class SimTradeService {
         }
     }
 
-    /** 模拟建仓（写 open_positions，不调币安下单） */
+    /** 模拟建仓（写 open_positions，不调币安下单）
+     *  完全对齐实盘口径：qty = openMargin × leverage / price，
+     *  margin = SIM_OPEN_MARGIN(5U)，并扣除开仓手续费(Taker 0.05%)计入浮亏。 */
     private void openPosition(Map<String, Object> sig) {
         String sym = (String) sig.get("symbol");
         String dir = (String) sig.get("direction");
@@ -186,15 +187,16 @@ public class SimTradeService {
                 ? ((Number) sig.get("current_price")).doubleValue() : 0;
         if (cur <= 0) return;
 
+        // 实盘：qty = openMargin × effLeverage / price（保证金占用 = openMargin）
+        double qty = SIM_OPEN_MARGIN.doubleValue() * SIM_LEVERAGE / cur;
+
         OpenPosition op = new OpenPosition();
         op.setUserId(SIM_USER_ID);
         op.setSymbol(sym);
         op.setStrategy("G");
         op.setDirection(dir);
-        // qty = 保证金 * 杠杆 / 价格
-        op.setQty(SIM_OPEN_MARGIN.multiply(BigDecimal.valueOf(SIM_LEVERAGE))
-                .divide(BigDecimal.valueOf(cur), 8, RoundingMode.DOWN));
-        op.setEntryPrice(BigDecimal.valueOf(cur));
+        op.setQty(BigDecimal.valueOf(round8(qty)));
+        op.setEntryPrice(BigDecimal.valueOf(round4(cur)));
         op.setLeverage(SIM_LEVERAGE);
         // 模拟账户固定 tp/sl（与 G 默认一致：tp+10, sl-5）
         op.setTpRatio(new BigDecimal("10"));
@@ -210,22 +212,35 @@ public class SimTradeService {
         op.setReducePrice(optDec(sig, "reduce_price"));
 
         openPositionMapper.insert(op);
-        log.info("[SimG] 模拟开仓 {} {} @{} 参考位(防{}/目{})",
-                dir, sym, round4(cur),
+        log.info("[SimG] 模拟开仓 {} {} @{} 数量{} leverage{}参考位(防{}/目{})",
+                dir, sym, round4(cur), round6(qty), SIM_LEVERAGE,
                 op.getDefensePrice() == null ? "-" : op.getDefensePrice().toPlainString(),
                 op.getTargetPrice() == null ? "-" : op.getTargetPrice().toPlainString());
     }
 
-    /** 平仓归档（写 trade_history：user_id=模拟账户） */
+    /** 平仓归档（写 trade_history：user_id=模拟账户），pnl/ratio 完全对齐实盘保证金口径：
+     *   priceMove% = 价格变动百分(带方向)；assetPnl = qty × (exit-entry)×符号；
+     *   margin = openMargin(5U)；保证金收益率 ratio = assetPnl / margin × 100；
+     *   pnl = assetPnl - 开仓手续费 - 平仓手续费(Taker 0.05% × 名义价值)。 */
     private void closePosition(OpenPosition pos, double exitPrice, String reason,
-                               double cur, double pnlRatioPct) {
+                               double cur, double priceMovePct) {
         double entry = pos.getEntryPrice().doubleValue();
-        // qty * (exit - entry) * 方向符号 → U
         boolean isLong = "LONG".equalsIgnoreCase(pos.getDirection());
-        double pnl = pos.getQty().doubleValue()
-                * (isLong ? (exitPrice - entry) : (entry - exitPrice));
-        // 注意：合约 pnl 实际为 qty*(exit-entry)/exit 视角，此处按传统(exit-entry)*qty 近似，
-        // 百分比用 pnlRatioPct（以入场价为基准）与实盘口径一致便于对比。
+        double qty = pos.getQty().doubleValue();
+
+        // 名义价值 = qty × 价格（单边）
+        double notional = qty * entry;
+        // 开/平仓手续费(Taker 0.05% × 名义价值)
+        double feeOpen = notional * 0.0005;
+        double feeClose = qty * exitPrice * 0.0005;
+        double fees = feeOpen + feeClose;
+
+        // 毛利（资产视角）
+        double grossPnl = qty * (isLong ? (exitPrice - entry) : (entry - exitPrice));
+        // 扣手续费后的净盈亏(U)
+        double pnl = grossPnl - fees;
+        // 保证金收益率 = 资产净盈亏 / 保证金 × 100
+        double ratio = SIM_OPEN_MARGIN.doubleValue() > 0 ? pnl / SIM_OPEN_MARGIN.doubleValue() * 100.0 : 0.0;
 
         TradeHistory th = new TradeHistory();
         th.setUserId(SIM_USER_ID);
@@ -238,23 +253,23 @@ public class SimTradeService {
         th.setExitPrice(BigDecimal.valueOf(round4(exitPrice)));
         th.setLeverage(pos.getLeverage());
         th.setPnl(BigDecimal.valueOf(round4(pnl)));
-        th.setPnlRatio(BigDecimal.valueOf(round4(pnlRatioPct)));
+        th.setPnlRatio(BigDecimal.valueOf(round4(ratio)));
         th.setCloseReason(reason);
         th.setOpenedAt(pos.getOpenedAt());
         th.setClosedAt(LocalDateTime.now());
         tradeHistoryMapper.insert(th);
 
-        // 更新持仓为已平仓
+        // 更新持仓为已平仓（补齐所有字段）
         pos.setStatus("CLOSED");
         pos.setClosedAt(LocalDateTime.now());
         pos.setClosePrice(BigDecimal.valueOf(round4(exitPrice)));
         pos.setCloseReason(reason);
         pos.setPnl(BigDecimal.valueOf(round4(pnl)));
-        pos.setPnlRatio(BigDecimal.valueOf(round4(pnlRatioPct)));
+        pos.setPnlRatio(BigDecimal.valueOf(round4(ratio)));
         openPositionMapper.updateById(pos);
 
-        log.info("[SimG] 模拟平仓 {} {} @{} 原因={} 盈亏={}U ({:.1f}%)",
-                pos.getDirection(), pos.getSymbol(), round4(exitPrice), reason, round4(pnl), pnlRatioPct);
+        log.info("[SimG] 模拟平仓 {} {} @{} 原因={} 净盈亏={}U (保证金收益率{}%, 费用{}U)",
+                pos.getDirection(), pos.getSymbol(), round4(exitPrice), reason, round4(pnl), String.format("%.1f", ratio), round4(fees));
     }
 
     private List<OpenPosition> listOpen() {
@@ -299,5 +314,13 @@ public class SimTradeService {
 
     private static double round4(double v) {
         return Math.round(v * 10000.0) / 10000.0;
+    }
+
+    private static double round6(double v) {
+        return Math.round(v * 1000000.0) / 1000000.0;
+    }
+
+    private static double round8(double v) {
+        return Math.round(v * 100000000.0) / 100000000.0;
     }
 }
