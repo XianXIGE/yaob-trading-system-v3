@@ -876,6 +876,8 @@ public class TradeEngineService {
         double avail = rt.availableMargin != null ? rt.availableMargin.doubleValue() : 0;
         double openMargin = user.getOpenMargin() != null ? user.getOpenMargin().doubleValue() : 5.0;
         int leverage = user.getLeverage() != null ? user.getLeverage() : 5;
+        // [v3.7.1 H策略专属] 账户总资产(币安 totalMarginBalance)用于 H 保证金计算
+        double accountTotal = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
 
         List<String> opened = new ArrayList<>();
         int maxOpen = Math.min(5, Math.min(pool.size(), maxTotalPositions - currentPositions)); // [扩量] 每轮开仓5 更激进
@@ -887,6 +889,12 @@ public class TradeEngineService {
             Map<String, Object> cand = pool.get(i);
             String sym0 = rawSymbol(cand.get("symbol").toString());
 
+            // [v3.7.1 H策略专属杠杆/保证金] H 策略每笔仓位 = 账户总资产 × 25%，杠杆固定 150x
+            boolean isH = cand.get("strategy") != null
+                    && "H".equalsIgnoreCase(cand.get("strategy").toString());
+            double effOpenMargin = isH ? accountTotal * 0.25 : openMargin;
+            int effLeverage = isH ? 150 : leverage;
+
             if (held.contains(sym0)) continue;
 
             // [止损冷却] 该币止损平仓后处于冷却期内, 跳过开仓(避免同一币反复止损)
@@ -897,22 +905,22 @@ public class TradeEngineService {
                 continue;
             }
 
-            // 保证金门槛
-            if (avail < openMargin) {
-                cand.put("unopen_reason", String.format("保证金不足(%.2f<%.2f)", avail, openMargin));
+            // 保证金门槛 (H策略用专属保证金=总资产×25%, 其他用用户 openMargin)
+            if (avail < effOpenMargin) {
+                cand.put("unopen_reason", String.format("保证金不足(%.2f<%.2f)", avail, effOpenMargin));
                 continue;
             }
 
-            // [v3.4 单笔风险上限] 本仓最大止损额 = openMargin * |sl_ratio|% 
-            // 方案B：上限 = max(总资产*1%, openMargin档位对应风险) —— 保证单仓能按用户设定的开仓档位正常开，
-            // 仅当 openMargin 档位远超账户承受能力(总资产过小)时才拦截，避免小账户被 1% 上限误伤导致永不开仓。
+            // [v3.4 单笔风险上限] 本仓最大止损额 = effOpenMargin * |sl_ratio|% 
+            // 方案B：上限 = max(总资产*1%, effOpenMargin档位对应风险) —— 保证单仓能按用户设定的开仓档位正常开，
+            // 仅当 effOpenMargin 档位远超账户承受能力(总资产过小)时才拦截，避免小账户被 1% 上限误伤导致永不开仓。
             double totalAssetsNow = rt.accountTotalAssets != null ? rt.accountTotalAssets.doubleValue() : 0;
             String riskStrat = String.valueOf(cand.get("strategy"));
             Map<String, Object> riskP = params.get(riskStrat.toUpperCase());
             double riskSlRatio = 0;
             if (riskP != null) riskSlRatio = getParamDouble(riskP, "sl_ratio");
-            double thisRisk = openMargin * Math.abs(riskSlRatio) / 100.0;
-            double minRiskFloor = openMargin * Math.abs(riskSlRatio) / 100.0; // openMargin 档位保底风险
+            double thisRisk = effOpenMargin * Math.abs(riskSlRatio) / 100.0;
+            double minRiskFloor = effOpenMargin * Math.abs(riskSlRatio) / 100.0; // effOpenMargin 档位保底风险
             double maxSingleRisk = Math.max(totalAssetsNow * 0.01, minRiskFloor);
             if (totalAssetsNow > 0 && thisRisk > maxSingleRisk) {
                 cand.put("unopen_reason", String.format("单笔风险超限(%s>%s)", fmt(thisRisk), fmt(maxSingleRisk)));
@@ -938,19 +946,19 @@ public class TradeEngineService {
                     // 获取费率失败不阻断
                 }
 
-                // 设置杠杆: 若配置杠杆超过该币种最大杠杆上限, 自动降级到上限(避免 FAPI 400 "Leverage N is not valid")
-                int effLeverage = leverage;
+                // 设置杠杆: 若配置/固定杠杆超过该币种最大杠杆上限, 自动降级到上限(避免 FAPI 400 "Leverage N is not valid")
+                // [v3.7.1 H策略专属] effLeverage 已在循环开头定义 (H=150x, 其他=用户杠杆)
                 try {
                     int maxLev = fapi.getMaxLeverage(sym0, keys[0], keys[1]);
-                    if (maxLev > 0 && leverage > maxLev) {
+                    if (maxLev > 0 && effLeverage > maxLev) {
                         effLeverage = maxLev;
-                        log.info("[auto-trade:{}] {} 配置杠杆{}x超上限{}x, 自动降级为{}x", user.getUsername(), sym0, leverage, maxLev, maxLev);
+                        log.info("[auto-trade:{}] {} 配置杠杆{}x超上限{}x, 自动降级为{}x", user.getUsername(), sym0, effLeverage > maxLev ? effLeverage : leverage, maxLev, maxLev);
                     }
                 } catch (Exception e) {
                     log.warn("[auto-trade:{}] 查询 {} 最大杠杆失败: {}", user.getUsername(), sym0, e.getMessage());
                 }
-                // 按实际生效杠杆计算数量, 保证保证金占用与 openMargin 一致
-                double qty = price > 0 ? openMargin * effLeverage / price : 0;
+                // 按实际生效杠杆计算数量, 保证保证金占用与 effOpenMargin 一致
+                double qty = price > 0 ? effOpenMargin * effLeverage / price : 0;
                 if (qty <= 0) continue;
                 fapi.setLeverage(sym0, effLeverage, keys[0], keys[1]);
                 // 双向持仓模式(Hedge): 开仓必须带对应的 positionSide (LONG/SHORT); 单向传 BOTH
@@ -965,7 +973,7 @@ public class TradeEngineService {
                     } catch (Exception e) { /* 用ticker价格兜底 */ }
                 }
                 opened.add(sym0);
-                avail -= openMargin;
+                avail -= effOpenMargin;
                 rt.availableMargin = BigDecimal.valueOf(avail);
 
                 // 记录持仓

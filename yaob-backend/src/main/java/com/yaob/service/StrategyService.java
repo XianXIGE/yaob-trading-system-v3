@@ -93,7 +93,17 @@ public class StrategyService {
     public void toggleStrategy(Long userId, String strategy) {
         String sk = strategy.toUpperCase();
         StrategyConfig config = strategyConfigMapper.findByUserIdAndStrategy(userId, sk);
-        if (config == null) throw new RuntimeException("策略配置不存在");
+        if (config == null) {
+            // 内置默认策略(如新增的 H/BTC/ETH专属)首次开启时自动落库，避免“策略配置不存在”
+            Map<String, Object> defaults = UserService.getDefaultParamsMap().get(sk);
+            addStrategy(userId, sk, defaults, null, null);
+            config = strategyConfigMapper.findByUserIdAndStrategy(userId, sk);
+            if (config == null) throw new RuntimeException("策略配置创建失败");
+            config.setEnabled(true);
+            strategyConfigMapper.updateById(config);
+            log.info("策略 {} 首次开启，已自动创建默认配置 (user_id={})", sk, userId);
+            return;
+        }
         config.setEnabled(!Boolean.TRUE.equals(config.getEnabled()));
         strategyConfigMapper.updateById(config);
     }
