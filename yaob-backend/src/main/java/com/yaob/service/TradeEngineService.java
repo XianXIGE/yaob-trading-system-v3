@@ -859,7 +859,7 @@ public class TradeEngineService {
 
         // 总持仓上限检查
         int currentPositions = openPositionMapper.findOpenByUserId(userId).size();
-        int maxTotalPositions = 20; // 最大同时持仓20个(扩量)
+        int maxTotalPositions = 15; // 最大同时持仓15个
 
         // 当前持仓币种集合
         Set<String> held = new HashSet<>();
