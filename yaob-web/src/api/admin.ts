@@ -38,3 +38,8 @@ export function getAdminLogs(userId?: number, limit = 200) {
   if (userId != null) params.userId = userId
   return request.get('/admin/logs', { params })
 }
+
+// [v3.6] 熔断解除/恢复开关（admin only）
+export function setCircuitBreakerOverride(userId: number, override: boolean) {
+  return request.post(`/admin/users/${userId}/circuit_breaker_override`, { override })
+}

@@ -25,6 +25,29 @@
                 {{ overview?.auto_trade_enabled ? '开启' : '关闭' }}
               </el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="熔断状态">
+              <el-tag :type="circuitBreakerOverridden ? 'warning' : 'success'" size="small">
+                {{ circuitBreakerOverridden ? '已手动解除(交易中)' : '熔断保护中' }}
+              </el-tag>
+              <el-button
+                v-if="circuitBreakerOverridden"
+                size="small"
+                type="warning"
+                plain
+                style="margin-left: 8px;"
+                :disabled="savingCb"
+                @click="toggleCircuitBreaker(false)"
+              >恢复熔断</el-button>
+              <el-button
+                v-else
+                size="small"
+                type="danger"
+                plain
+                style="margin-left: 8px;"
+                :disabled="savingCb"
+                @click="toggleCircuitBreaker(true)"
+              >解除熔断</el-button>
+            </el-descriptions-item>
             <el-descriptions-item label="过滤大盘币">{{ overview?.exclude_large_cap ? '是' : '否' }}</el-descriptions-item>
           </el-descriptions>
         </div>
@@ -152,9 +175,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 import {
   getUserOverview, getUserPositions, getUserTrades, getUserStrategies, getUserExcluded, getAdminLogs,
+  setCircuitBreakerOverride,
 } from '@/api/admin'
 
 const route = useRoute()
@@ -170,6 +195,33 @@ const logs = ref<any[]>([])
 
 const username = computed(() => overview.value?.username || '')
 const asset = computed(() => overview.value?.asset || {})
+
+// [v3.6] 熔断解除/恢复开关
+const circuitBreakerOverridden = computed(() => overview.value?.circuit_breaker_override === true)
+const savingCb = ref(false)
+async function toggleCircuitBreaker(override: boolean) {
+  try {
+    await ElMessageBox.confirm(
+      override
+        ? `确定解除用户 ${username.value} 的单日亏损熔断吗？解除后将立即恢复开仓（存在继续亏损风险）。`
+        : `确定恢复用户 ${username.value} 的单日亏损熔断保护吗？`,
+      override ? '解除熔断' : '恢复熔断',
+      { type: 'warning', confirmButtonText: override ? '确认解除' : '确认恢复' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  savingCb.value = true
+  try {
+    await setCircuitBreakerOverride(userId, override)
+    ElMessage.success(override ? '已解除熔断，恢复交易' : '已恢复熔断保护')
+    await load()
+  } catch {
+    ElMessage.error('操作失败')
+  } finally {
+    savingCb.value = false
+  }
+}
 
 function stratType(t?: string) {
   const map: Record<string, string> = {

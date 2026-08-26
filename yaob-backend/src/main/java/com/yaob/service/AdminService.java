@@ -82,6 +82,13 @@ public class AdminService {
         userMapper.deleteById(user.getId());
     }
 
+    /** [v3.6] 管理员设置/解除用户的单日亏损熔断 (circuit_breaker_override) */
+    public void setCircuitBreakerOverride(Long userId, boolean override) {
+        User user = requireUser(userId);
+        user.setCircuitBreakerOverride(override);
+        userMapper.updateById(user);
+    }
+
     // ============================================================
     // C 功能：用户详情查询（管理员）
     // ============================================================
@@ -107,6 +114,7 @@ public class AdminService {
         m.put("open_margin", u.getOpenMargin());
         m.put("leverage", u.getLeverage());
         m.put("exclude_large_cap", u.getExcludeLargeCap());
+        m.put("circuit_breaker_override", u.getCircuitBreakerOverride());
         m.put("created_at", u.getCreatedAt());
 
         // 累计已实现盈亏（trade_history）

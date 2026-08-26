@@ -68,6 +68,20 @@ public class AdminController {
         return Result.success(Map.of("username", username));
     }
 
+    // ---------- [v3.6] 熔断解除开关 (admin only) ----------
+    @PostMapping("/users/{userId}/circuit_breaker_override")
+    public Result<Map<String, Object>> setCircuitBreakerOverride(@PathVariable Long userId,
+                                                                 @RequestBody Map<String, Boolean> body,
+                                                                 HttpSession session,
+                                                                 HttpServletRequest request) {
+        User admin = requireAdmin(session);
+        boolean override = Boolean.TRUE.equals(body.get("override"));
+        adminService.setCircuitBreakerOverride(userId, override);
+        adminService.logOperation(admin.getUsername(), override ? "解除熔断" : "恢复熔断",
+                String.valueOf(userId), override ? "手动解除单日亏损熔断，恢复交易" : "恢复单日亏损熔断保护", clientIp(request));
+        return Result.success(Map.of("userId", userId, "circuit_breaker_override", override));
+    }
+
     // ---------- C 功能：用户详情查询（admin only） ----------
     @GetMapping("/users/{userId}/overview")
     public Result<Map<String, Object>> overview(@PathVariable Long userId, HttpSession session, HttpServletRequest request) {
