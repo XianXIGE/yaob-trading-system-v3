@@ -51,7 +51,7 @@ services:
 
   # ===================== Java 后端 =====================
   backend:
-    image: yaob-backend:3.6.1
+    image: yaob-backend:3.6.2
     container_name: yaob-backend
     restart: always
     depends_on:
@@ -79,7 +79,7 @@ services:
 
   # ===================== Vue 前端 (Nginx) =====================
   web:
-    image: yaob-trading-system-v3-web:3.6.1
+    image: yaob-trading-system-v3-web:3.6.2
     container_name: yaob-web
     restart: always
     depends_on:

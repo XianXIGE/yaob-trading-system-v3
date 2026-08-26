@@ -903,14 +903,6 @@ public class TradeEngineService {
 
                 // 设置杠杆: 若配置杠杆超过该币种最大杠杆上限, 自动降级到上限(避免 FAPI 400 "Leverage N is not valid")
                 int effLeverage = leverage;
-                // [v3.6.1 立昕见影止血] G 策略强制封顶 10x：
-                // 实盘归因 G 多头 20x+紧止损 下 61% 触发止损（平均 -26.5%）。降杠杆是控制单笔亏损最直接手段。
-                if ("G".equalsIgnoreCase(String.valueOf(cand.get("strategy")))) {
-                    effLeverage = Math.min(leverage, 10);
-                    if (leverage > 10) {
-                        log.info("[auto-trade:{}] {} G策略杠杆 {}x 降级至上限 10x", user.getUsername(), sym0, leverage);
-                    }
-                }
                 try {
                     int maxLev = fapi.getMaxLeverage(sym0, keys[0], keys[1]);
                     if (maxLev > 0 && leverage > maxLev) {
