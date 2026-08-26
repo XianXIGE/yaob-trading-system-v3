@@ -904,6 +904,20 @@ public class TradeEngineService {
                 double tpRatio = sp != null ? getParamDouble(sp, "tp_ratio") : 0;
                 double slRatio = sp != null ? getParamDouble(sp, "sl_ratio") : 0;
 
+                // [v3.5 风控兜底] 止损/止盈配置无效时强制写默认，避免“裸奔”：
+                // 归因显示 sl 缺失/配错会使 autoClose 的 sl<0 分支永不触发，只能熬到 48h 超时强平，单边行情一次回吐全部。
+                // 规则：止损须为负数且不深于 -60%；止盈须为正数。无效则退默认(-2.5% / +8%)。
+                if (!(slRatio < 0 && slRatio >= -60.0)) {
+                    log.warn("[auto-trade:{}] {} 策略{}止损比例无效(={})，强制兜底为 -2.5%",
+                            user.getUsername(), sym0, sk, slRatio);
+                    slRatio = -2.5;
+                }
+                if (!(tpRatio > 0)) {
+                    log.warn("[auto-trade:{}] {} 策略{}止盈比例无效(={})，强制兜底为 8%",
+                            user.getUsername(), sym0, sk, tpRatio);
+                    tpRatio = 8.0;
+                }
+
                 OpenPosition op = new OpenPosition();
                 op.setUserId(userId);
                 op.setSymbol(sym0);

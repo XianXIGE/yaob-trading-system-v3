@@ -315,6 +315,32 @@ public class StrategyDetectorService {
         double qv = getDouble(tick, "quoteVolume");
         if (qv < volMin) return null;
 
+        // [v3.5 修复] G 策略补齐大盘顺趋势过滤(v3.4 只给 A-F 加了 need_btc_*，漏了 G)：
+        // 实盘归因显示 G 逆势单是延续亏损主源（强势币 ONG/PROM 被反复摸顶做空），
+        // 与 A-F 同口径：need_btc_weak(缺省 true)=BTC强势时禁做空；need_btc_strong(缺省 true)=BTC弱势时禁做多。
+        boolean shortNeedsWeak  = getParamBool(p, "need_btc_weak", true);
+        boolean longNeedsStrong = getParamBool(p, "need_btc_strong", true);
+        boolean btcBullish = isBtcBullish();
+
+        // [v3.5] 币自身大周期趋势闸门(4h EMA50 + “站稳”缓冲带)：
+        // 仅靠大盘不够——币可自身强势而大盘未必（ONG 1h/4h 单边强，仍被摸顶做空）。
+        // 做多需现价站稳 4h EMA50 上方(>EMA50*1.03)；做空需现价站稳其下方(<EMA50*0.97)。
+        // “站稳缓冲”±3% 避免贴均线反复穿越的假方向。
+        boolean coinBull4h;
+        try {
+            JsonNode k4 = fapi.klines(sym, "4h", 60);
+            if (k4 != null && k4.isArray() && k4.size() >= 50) {
+                double[] c4 = new double[k4.size()];
+                for (int i = 0; i < k4.size(); i++) c4[i] = k4.get(i).get(4).asDouble();
+                double e50_4h = emaVal(c4, 50);
+                coinBull4h = cur > e50_4h * 1.03;
+            } else {
+                coinBull4h = true; // 数据不足时保守放行(不误伤)
+            }
+        } catch (Exception e) {
+            coinBull4h = true; // 拉取失败保守放行
+        }
+
         try {
             JsonNode kl = fapi.klines(sym, "1h", 120);
             if (kl == null || !kl.isArray() || kl.size() < emaLong + 10) return null;
@@ -378,54 +404,61 @@ public class StrategyDetectorService {
             boolean isGreenBar = lastClose > lastOpen; // 阳线
             boolean isRedBar = lastClose < lastOpen;   // 阴线
 
+            // 双重闸门最终方向许可：
+            //   做多需【BTC强势(且 need_btc_strong 开启)】 AND 【币4h站稳强势】
+            //   做空需【BTC弱势(且 need_btc_weak 开启)】  AND 【币4h站稳弱势】
+            // 彻底杜绝强势币被反向摸顶做空(如 ONG/PROM)。
+            boolean longAllowed  = (!longNeedsStrong || btcBullish) && coinBull4h;
+            boolean shortAllowed = (!shortNeedsWeak  || !btcBullish) && !coinBull4h;
+
             String subSignal = null;
             String direction = null;
             String defense = null;
             String target = null;
             String reason = null;
 
-            // A. 关注做多: close>EMA20>EMA60 + 放量(量比>=volRatioMin) + 阳线
-            if (cur > e20 && e20 > e60 && lastVolRatio >= volRatioMin && isGreenBar) {
+            // A. 关注做多: close>EMA20>EMA60 + 放量(量比>=volRatioMin) + 阳线 (需做多许可)
+            if (longAllowed && cur > e20 && e20 > e60 && lastVolRatio >= volRatioMin && isGreenBar) {
                 subSignal = "关注做多";
                 direction = "LONG";
                 defense = String.format("EMA20 %.4g / EMA60 %.4g", e20, e60);
                 target = String.format("%.4g", hi24);
                 reason = String.format("顺势放量阳线(量比%.1f) 站上EMA20>EMA60", lastVolRatio);
             }
-            // B. 回调做多: 趋势偏强(EMA20>EMA60) + 缩量回调至EMA20下方
-            else if (bullish && cur < e20 && lastVolRatio < 1.0) {
+            // B. 回调做多: 趋势偏强(EMA20>EMA60) + 缩量回调至EMA20下方 (需做多许可)
+            else if (longAllowed && bullish && cur < e20 && lastVolRatio < 1.0) {
                 subSignal = "回调做多";
                 direction = "LONG";
                 defense = String.format("EMA60 %.4g", e60);
                 target = String.format("%.4g", hi24);
                 reason = String.format("趋势偏强+缩量回调(量比%.1f) 至EMA20下方", lastVolRatio);
             }
-            // C. 超跌反弹: RSI<oversold + 转阳 + 深度偏离EMA60
-            else if (r < rsiOversold && isGreenBar && cur < e60 * 0.92) {
+            // C. 超跌反弹: RSI<oversold + 转阳 + 深度偏离EMA60 (需做多许可，弱势禁抄底接飞刀)
+            else if (longAllowed && r < rsiOversold && isGreenBar && cur < e60 * 0.92) {
                 subSignal = "超跌反弹";
                 direction = "LONG";
                 defense = String.format("%.4g(再创新低无条件走)", lo24);
                 target = String.format("EMA60 %.4g", e60);
                 reason = String.format("RSI=%.0f 超跌转阳 偏离EMA60 %.1f%%", r, (cur / e60 - 1) * 100);
             }
-            // D. 关注做空: close<EMA20<EMA60 + 放量(量比>=volRatioMin) + 阴线
-            else if (cur < e20 && e20 < e60 && lastVolRatio >= volRatioMin && isRedBar) {
+            // D. 关注做空: close<EMA20<EMA60 + 放量(量比>=volRatioMin) + 阴线 (需做空许可)
+            else if (shortAllowed && cur < e20 && e20 < e60 && lastVolRatio >= volRatioMin && isRedBar) {
                 subSignal = "关注做空";
                 direction = "SHORT";
                 defense = String.format("EMA20 %.4g / EMA60 %.4g", e20, e60);
                 target = String.format("%.4g", lo24);
                 reason = String.format("顺势放量阴线(量比%.1f) 跌破EMA20<EMA60", lastVolRatio);
             }
-            // E. 反弹做空: 趋势偏空(EMA20<EMA60) + 缩量反弹至EMA20上方
-            else if (bearish && cur > e20 && lastVolRatio < 1.0) {
+            // E. 反弹做空: 趋势偏空(EMA20<EMA60) + 缩量反弹至EMA20上方 (需做空许可)
+            else if (shortAllowed && bearish && cur > e20 && lastVolRatio < 1.0) {
                 subSignal = "反弹做空";
                 direction = "SHORT";
                 defense = String.format("EMA60 %.4g", e60);
                 target = String.format("%.4g", lo24);
                 reason = String.format("趋势偏空+缩量反弹(量比%.1f) 至EMA20上方", lastVolRatio);
             }
-            // F. 冲高回落做空: 上影线长 + 收盘阴线 + 缩量
-            else if (lastHigh - lastClose >= wickBodyRatio * Math.max(lastClose - lastOpen, 1e-9)
+            // F. 冲高回落做空: 上影线长 + 收盘阴线 + 缩量 (需做空许可，强势币禁摸顶)
+            else if (shortAllowed && lastHigh - lastClose >= wickBodyRatio * Math.max(lastClose - lastOpen, 1e-9)
                     && isRedBar && lastVolRatio < 1.0) {
                 subSignal = "冲高回落";
                 direction = "SHORT";
