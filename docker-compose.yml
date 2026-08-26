@@ -79,7 +79,7 @@ services:
 
   # ===================== Vue 前端 (Nginx) =====================
   web:
-    image: yaob-trading-system-v3-web:3.6.2
+    image: yaob-trading-system-v3-web:3.7.0
     container_name: yaob-web
     restart: always
     depends_on:
