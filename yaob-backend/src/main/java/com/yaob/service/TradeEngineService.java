@@ -1134,11 +1134,16 @@ public class TradeEngineService {
     private Set<String> getExcludedSet(User user) {
         List<ExcludedSymbol> excluded = excludedSymbolMapper.findByUserId(user.getId());
         Set<String> set = new HashSet<>();
+        // [fix v3.9.2] 自动+手动黑名单统一由 excludeLargeCap 总开关控制:
+        // 开关开(排除黑名单) -> 自动(large_cap)和手动(manual)都进入过滤集合;
+        // 开关关 -> 都不生效(允许黑名单内币开仓, 如模拟盘测试)。
+        if (!Boolean.TRUE.equals(user.getExcludeLargeCap())) {
+            return set;
+        }
         for (ExcludedSymbol e : excluded) {
-            // 手动黑名单无条件排除；自动黑名单(大市值)仍放入集合，由开关控制
-            if ("manual".equals(e.getCategory()) || !Boolean.TRUE.equals(user.getExcludeLargeCap())) {
-                set.add(e.getSymbol());
-            }
+            // 统一归一化为币安全原始无斜杠大写格式(如 ANTHROPIC/USDT -> ANTHROPICUSDT),
+            // 与 candidates 里 ticker 的 sym 精确匹配, 避免带斜杠脏数据导致黑名单失效
+            set.add(rawSymbol(e.getSymbol()));
         }
         return set;
     }

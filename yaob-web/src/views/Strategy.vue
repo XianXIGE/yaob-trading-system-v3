@@ -201,8 +201,8 @@ const paramDefs: Record<string, { label: string; field: string; step?: number; m
     { label: '超跌RSI阈值', field: 'rsi_oversold', step: 1, min: 0, max: 100, unit: '' },
     { label: '上影/实体比', field: 'wick_body_ratio', step: 0.1, min: 0, unit: '倍' },
     { label: '24h成交额下限', field: 'vol_min', step: 1000000, min: 0, unit: 'USDT' },
-    { label: '止盈比例', field: 'tp_ratio', step: 1, min: 0, unit: '%' },
-    { label: '止损比例', field: 'sl_ratio', step: 1, unit: '%' },
+    { label: '价格涨幅(止盈)', field: 'tp_ratio', step: 1, min: 0, unit: '%' },
+    { label: '价格跌幅(止损)', field: 'sl_ratio', step: 1, unit: '%' },
   ],
   h: [
     { label: '4h分水岭EMA', field: 'ema_short', step: 1, min: 1, unit: '根' },
