@@ -45,6 +45,8 @@ public class TradeEngineService {
     @Autowired
     private PositionCloseService positionCloseService;
     @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    @Autowired
     private StrategyDetectorService strategyDetector;
     @Autowired
     private OperationLogMapper operationLogMapper;
@@ -133,6 +135,14 @@ public class TradeEngineService {
      * 统一口径：runScan() 的实时熔断状态与 autoOpenPositions() 的开仓熔断检查共用同一个值。
      */
     private static final double DAILY_LOSS_CIRCUIT_BREAKER_RATIO = 0.05; // 5% [v3.4 放宽熔断, 配合风控]
+
+    /** [v3.12] ATR自适应止损保护倍数: 允许 N 倍ATR(1h) 的瞬时波动不触发止损（妖币插针保护） */
+    private static final double ATR_PROTECT_MULT = 2.5;
+
+    /** [v3.12] 二级熔断阈值: 周亏损比例(相对总资产), 触发后停开仓至下周一 */
+    private static final double WEEKLY_LOSS_CIRCUIT_BREAKER_RATIO = 0.10; // 10%
+    /** [v3.12] 三级熔断阈值: 账户历史最大回撤比例(相对峰值总资产), 触发后停开仓 */
+    private static final double DRAWDOWN_CIRCUIT_BREAKER_RATIO = 0.20; // 20%
 
     /** 解密并返回指定用户的币安 API 密钥对（无密钥返回 null 表示模拟模式） */
     private String[] apiKeysOf(User user) {
@@ -701,9 +711,52 @@ public class TradeEngineService {
                 shouldClose = true;
                 reason = "tp";
             } else if (!shouldClose && sl < 0 && ratio <= sl) {
-                log.info("[auto-close:{}] {} 止损 ratio={}% <= sl={}", user.getUsername(), sym0, String.format("%.2f", ratio), sl);
-                shouldClose = true;
-                reason = "sl";
+                // [v3.12 ATR自适应止损保护] 固定比例止损前叠加ATR缓冲:
+                //   妖币波动剧烈, 固定 sl_ratio 易被瞬时插针打掉。当价格跌幅已触及固定止损位,
+                //   但偏离开仓价仍在 N 倍ATR(14) 波动范围内时, 判定为正常波动而非趋势反转, 暂不扫损。
+                //   仅 A-F 非G策略走此保护; G 策略已用价格口径+G动态防守位, 不在此叠加。
+                //   命中ATR保护时仅记录日志(不置 shouldClose), 等价格持续突破 ATR 上限后才真正止损。
+                boolean atrProtectHit = false;
+                boolean isGStrat2 = pos.getStrategy() != null && "G".equalsIgnoreCase(pos.getStrategy());
+                if (!isGStrat2 && entry > 0) {
+                    double priceMove = isLongPos ? (last - entry) / entry * 100
+                                                : (entry - last) / entry * 100; // 价格口径跌幅(多空统一为负值亏损方向)
+                    try {
+                        JsonNode kl = fapi.klines(sym0, "1h", 80);
+                        if (kl != null && kl.isArray() && kl.size() >= 16) {
+                            int n = kl.size();
+                            double atrSum = 0;
+                            for (int i = 1; i < n; i++) {
+                                double hi  = kl.get(i).get(2).asDouble();
+                                double lo  = kl.get(i).get(3).asDouble();
+                                double pc  = kl.get(i - 1).get(4).asDouble();
+                                double tr1 = hi - lo;
+                                double tr2 = Math.abs(hi - pc);
+                                double tr3 = Math.abs(lo - pc);
+                                atrSum += Math.max(tr1, Math.max(tr2, tr3));
+                            }
+                            double atr = atrSum / (n - 1);
+                            // ATR保护: 若价格跌幅 尚未达到 atr倍数(按1h ATR相对开仓价折算) 视为插针
+                            //   阈值: atrPct = atr / entry * 100; 允许 2.5 倍 ATR 的瞬时波动
+                            double atrPct = atr / entry * 100.0;
+                            double tolerance = Math.abs(sl) * 1.5; // 兜底: 保护带宽上限(避免无限放大)
+                            double breachPct = -priceMove; // 当前亏损幅度(正数)
+                            if (atrPct > 0 && breachPct >= (-sl) && breachPct < Math.min(atrPct * ATR_PROTECT_MULT, tolerance)) {
+                                atrProtectHit = true;
+                                log.info("[auto-close:{}] {} ATR保护: 跌幅{}%已触及sl={}%但仍在{}xATR({}%)内, 判定插针不扫损",
+                                        user.getUsername(), sym0, String.format("%.2f", breachPct), sl,
+                                        ATR_PROTECT_MULT, String.format("%.2f", atrPct * ATR_PROTECT_MULT));
+                            }
+                        }
+                    } catch (Exception atrErr) {
+                        log.warn("[auto-close:{}] {} ATR计算失败, 退固定止损: {}", user.getUsername(), sym0, atrErr.getMessage());
+                    }
+                }
+                if (!atrProtectHit) {
+                    log.info("[auto-close:{}] {} 止损 ratio={}% <= sl={}", user.getUsername(), sym0, String.format("%.2f", ratio), sl);
+                    shouldClose = true;
+                    reason = "sl";
+                }
             }
 
             // 持仓超时检查（最长持仓48小时）
@@ -906,6 +959,51 @@ public class TradeEngineService {
         if (!breakerOverride && totalAssets > 0 && dailyLoss <= -maxDailyLoss) {
             log.warn("[auto-trade:{}] 单日亏损 {}U 超过熔断线 {}U, 停止开仓", user.getUsername(), String.format("%.2f", dailyLoss), String.format("%.2f", -maxDailyLoss));
             return;
+        }
+
+        // [v3.12] 二级熔断: 周亏损检查(近7日已实现盈亏, 相对当前总资产)
+        if (!breakerOverride && totalAssets > 0) {
+            try {
+                LocalDateTime weekStart = LocalDateTime.now().minusDays(7);
+                BigDecimal weekPnl = tradeHistoryMapper.sumRealizedPnlSince(userId, weekStart);
+                if (weekPnl != null) {
+                    double weekLoss = weekPnl.doubleValue();
+                    if (weekLoss <= -(totalAssets * WEEKLY_LOSS_CIRCUIT_BREAKER_RATIO)) {
+                        log.warn("[auto-trade:{}] 近7日亏损 {}U 超过周熔断线 {}U, 停止开仓",
+                                user.getUsername(), String.format("%.2f", weekLoss),
+                                String.format("%.2f", -(totalAssets * WEEKLY_LOSS_CIRCUIT_BREAKER_RATIO)));
+                        return;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[auto-trade:{}] 周熔断检查失败: {}", user.getUsername(), e.getMessage());
+            }
+        }
+
+        // [v3.12] 三级熔断: 账户历史峰值回撤检查(Redis 持久化账户峰值, 较峰值最大回撤20%停开仓)
+        if (!breakerOverride && totalAssets > 0) {
+            try {
+                String peakKey = "yaob:peak:acc:" + userId;
+                String peakStr = redisTemplate.opsForValue().get(peakKey);
+                double peak = 0;
+                if (peakStr != null && !peakStr.isBlank()) {
+                    peak = Double.parseDouble(peakStr);
+                }
+                if (totalAssets > peak) {
+                    peak = totalAssets;
+                    redisTemplate.opsForValue().set(peakKey, String.valueOf(peak));
+                } else if (peak > 0) {
+                    double dd = (peak - totalAssets) / peak; // 回撤比例 0..1
+                    if (dd >= DRAWDOWN_CIRCUIT_BREAKER_RATIO) {
+                        log.warn("[auto-trade:{}] 账户回撤 {}% >= {}%, 峰值 {}U 现 {}U, 停止开仓",
+                                user.getUsername(), String.format("%.1f", dd * 100), String.format("%.1f", DRAWDOWN_CIRCUIT_BREAKER_RATIO * 100),
+                                String.format("%.2f", peak), String.format("%.2f", totalAssets));
+                        return;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[auto-trade:{}] 回撤熔断检查失败: {}", user.getUsername(), e.getMessage());
+            }
         }
 
         // 总持仓上限检查
