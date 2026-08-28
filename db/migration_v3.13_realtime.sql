@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS `backtest_results` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回测结果归档表';
 
 -- 3) open_positions 新增 ATR 自适应止损字段 (v3.13 P0-3)
-ALTER TABLE `open_positions`
-  ADD COLUMN IF NOT EXISTS `atr` DECIMAL(12,8) NULL COMMENT '开仓时ATR(14)' AFTER `reduce_price`,
-  ADD COLUMN IF NOT EXISTS `atr_stop_price` DECIMAL(20,8) NULL COMMENT '2xATR缓冲止损绝对价' AFTER `atr`;
+-- MySQL 8.0 不支持 ADD COLUMN IF NOT EXISTS (MariaDB 语法)，故用两条条件 ADD。
+-- 幂等：列已存在则跳过（用 stored procedure + information_schema 判断并动态执行）。
+SET @db = DATABASE();
+SET @col1 = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=@db AND table_name='open_positions' AND column_name='atr');
+SET @col2 = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=@db AND table_name='open_positions' AND column_name='atr_stop_price');
+SET @s1 = IF(@col1=0, 'ALTER TABLE `open_positions` ADD COLUMN `atr` DECIMAL(12,8) NULL COMMENT ''开仓时ATR(14)'' AFTER `reduce_price`', 'SELECT ''atr exists''');
+SET @s2 = IF(@col2=0, 'ALTER TABLE `open_positions` ADD COLUMN `atr_stop_price` DECIMAL(20,8) NULL COMMENT ''2xATR缓冲止损绝对价'' AFTER `atr`', 'SELECT ''atr_stop_price exists''');
+PREPARE st1 FROM @s1; EXECUTE st1; DEALLOCATE PREPARE st1;
+PREPARE st2 FROM @s2; EXECUTE st2; DEALLOCATE PREPARE st2;

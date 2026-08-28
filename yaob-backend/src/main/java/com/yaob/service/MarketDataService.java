@@ -62,14 +62,27 @@ public class MarketDataService {
             }
             if (!batch.isEmpty()) {
                 // MyBatis-Plus 无内置批量 insert; 分批单条插入+捕获唯一键冲突(幂等)。
+                // [fix v3.13.1] 原实现对所有异常空 catch 静默吞掉 + 日志打印 batch.size()(准备数而非成功数),
+                //   导致“落库 300 根”假象但实际一条未入。现改为: 统计真实成功数, 并记录第一条异常明细。
+                int success = 0;
+                String firstErr = null;
                 for (MarketData md : batch) {
                     try {
                         marketDataMapper.insert(md);
-                    } catch (Exception dup) {
-                        // UK(symbol,interval,open_time) 冲突则跳过, 幂等。
+                        success++;
+                    } catch (Exception dupE) {
+                        // UK(symbol,interval,open_time) 冲突属幂等不影响; 其余异常记录日志暴露真因。
+                        if (firstErr == null) {
+                            firstErr = dupE.getMessage();
+                        }
                     }
                 }
-                log.info("[market] {} {} 增量落库 {} 根K线", symbol, interval, batch.size());
+                if (success > 0) {
+                    log.info("[market] {} {} 实际落库 {} 根K线 (目标 {} 根)", symbol, interval, success, batch.size());
+                } else {
+                    log.warn("[market] {} {} 落库 0 条/共{}条, 首异常: {}", symbol, interval, batch.size(),
+                            firstErr == null ? "未知" : firstErr);
+                }
             }
             return batch.size();
         } catch (Exception e) {

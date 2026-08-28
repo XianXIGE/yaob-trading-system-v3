@@ -21,6 +21,9 @@ public class MarketData {
     private Long id;
 
     private String symbol;          // 币安全原始交易对，如 BTCUSDT
+
+    // interval 是 MySQL 保留字，MyBatis-Plus 自动生成 INSERT 列名时不加反引号会 SQL 语法报错，故显式用反引号包裹。
+    @TableField("`interval`")
     private String interval;        // 1m/5m/15m/1h/4h/1d
 
     @TableField("open_time")

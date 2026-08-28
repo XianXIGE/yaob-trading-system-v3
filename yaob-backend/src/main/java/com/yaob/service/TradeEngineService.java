@@ -64,6 +64,15 @@ public class TradeEngineService {
     private final Map<String, Long> slCooldownEnds = new ConcurrentHashMap<>();
     private static final long SL_COOLDOWN_MS = 30 * 60 * 1000L; // 30分钟
 
+    /** [v3.14 P1-假突破过滤] 近期止损次数: symbol -> 近 FACADE_WINDOW_MS 内的止损时间戳队列(升序)。
+     *  JASMY 类“假突破专业户”币种常跨小时反复触发同一方向信号并被扫损,
+     *  仅靠 30 分钟冷却治标不治本。此处做跨窗口记忆: 近 N 小时内止损 >= FACADE_MIN_SLS 次的币,
+     *  自动移出候选池(防反复假突破), 直到窗口内不再高频止损才恢复入场资格。 */
+    private final Map<String, java.util.ArrayDeque<Long>> slFreqWindow = new ConcurrentHashMap<>();
+    private static final long FACADE_WINDOW_MS = 4 * 60 * 60 * 1000L; // 4小时窗口
+    private static final int FACADE_MIN_SLS = 2;                        // 窗口内止损>=2次则判定假突破币
+    private static final long FACADE_BAR_MS = 30 * 60 * 1000L;          // 与冷却对齐的检查粒度
+
     /**
      * 候选池检测线程池（复用，避免每次扫描新建/销毁 16-48 线程）。
      * 懒加载：TradeEngineService 为长生命周期单例，池常驻，跨扫描复用。
@@ -139,6 +148,9 @@ public class TradeEngineService {
     /** [v3.12] ATR自适应止损保护倍数: 允许 N 倍ATR(1h) 的瞬时波动不触发止损（妖币插针保护） */
     private static final double ATR_PROTECT_MULT = 2.5;
 
+    /** [v3.13.1 P0] G策略杠杆封顶: 价格口径止损(-5%~-15%)下 20x 会致价格仅跌~5%即爆仓, 封顶 5x 保证止损前有充足保证金缓冲。 */
+    private static final int G_LEVERAGE_CAP = 5;
+
     /** [v3.12] 二级熔断阈值: 周亏损比例(相对总资产), 触发后停开仓至下周一 */
     private static final double WEEKLY_LOSS_CIRCUIT_BREAKER_RATIO = 0.10; // 10%
     /** [v3.12] 三级熔断阈值: 账户历史最大回撤比例(相对峰值总资产), 触发后停开仓 */
@@ -154,6 +166,41 @@ public class TradeEngineService {
             return new String[]{apiKey, apiSecret};
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    // ============ [v3.14 P1-假突破过滤] 近期高频止损币记忆 ============
+
+    /** 记录一次止损时间戳, 并清理窗口外过期记录, 返回窗口内止损次数(含本次)。 */
+    private int recordSlFreq(String sym0, long now) {
+        if (sym0 == null) return 0;
+        java.util.ArrayDeque<Long> q = slFreqWindow.computeIfAbsent(sym0, k -> new java.util.ArrayDeque<>());
+        synchronized (q) {
+            // 先进先出, 清掉窗口外的时间戳
+            while (!q.isEmpty() && (now - q.peekFirst()) > FACADE_WINDOW_MS) {
+                q.pollFirst();
+            }
+            q.addLast(now);
+            // 只保留窗口内的(最多 FACADE_MIN_SLS+1 条足矣)
+            while (q.size() > FACADE_MIN_SLS + 2) {
+                q.pollFirst();
+            }
+            int cnt = q.size();
+            log.info("[假突破过滤] {} 近{}h止损次数 -> {}", sym0, FACADE_WINDOW_MS / 3600000L, cnt);
+            return cnt;
+        }
+    }
+
+    /** 判断币种是否为“近期高频止损”(假突破币): 近窗口内止损 >= FACADE_MIN_SLS 次。 */
+    private boolean isFacadeCoin(String sym0, long now) {
+        if (sym0 == null) return false;
+        java.util.ArrayDeque<Long> q = slFreqWindow.get(sym0);
+        if (q == null) return false;
+        synchronized (q) {
+            while (!q.isEmpty() && (now - q.peekFirst()) > FACADE_WINDOW_MS) {
+                q.pollFirst();
+            }
+            return q.size() >= FACADE_MIN_SLS;
         }
     }
 
@@ -505,6 +552,14 @@ public class TradeEngineService {
                 if (qv0 < klineVolMin0 || Math.abs(priceChange) < minActivity) continue;
             }
 
+            // [v3.14 P1-假突破过滤] 近期高频止损币(如 JASMY 类假突破专业户)不进候选池: 近窗口内止损>=阈值的币,
+            //   即使当前有信号也跳过, 避免反复同一币假突破被扫损。此为跨4h记忆性过滤, 配合下方30分钟冷却形成双重防护。
+            // 仅当 G 启用时该过滤生效(假突破多发生在 G 日内多空逻辑); 其它策略不受影响。
+            boolean facadeGEnabled = Boolean.TRUE.equals(states.get("G"));
+            if (facadeGEnabled && isFacadeCoin(sym, System.currentTimeMillis())) {
+                continue;
+            }
+
             // 提交并行检测任务（每币独立，无共享可变状态）
             futures.add(detectPool.submit(() -> {
                 List<Map<String, Object>> localSig = new ArrayList<>();
@@ -699,7 +754,42 @@ public class TradeEngineService {
             if (!shouldClose && isGStrat && sl < 0 && entry > 0) {
                 // 价格口径涨跌幅: 多单=(last-entry)/entry, 空单=(entry-last)/entry
                 double pricePct = isLongPos ? (last - entry) / entry * 100 : (entry - last) / entry * 100;
-                if (pricePct <= sl) { // 价格跌幅达到 sl%(如 -15) 才止损
+                // [v3.13.1 P0-G ATR缓冲] G策略价格止损前叠加 ATR 波动缓冲(与 A-F 策略保护机制对齐, 但用价格口径):
+                //   妖币正常插针往往瞬间跌超固定 sl(-5%/-15%), 若偏离开仓价仍在 N×ATR(1h) 范围内则判定为波动而非趋势反转, 暂不扫损。
+                //   仅在固定止损位触及但处于 ATR 带宽内时生效; 持续突破 ATR 上限或 ATR 计算失败则正常止损。
+                boolean gAtrProtectHit = false;
+                if (pricePct <= sl) {
+                    double gBreach = -pricePct; // 当前亏损幅度(正数)
+                    try {
+                        JsonNode gk = fapi.klines(sym0, "1h", 120);
+                        if (gk != null && gk.isArray() && gk.size() >= 16) {
+                            int gn = gk.size();
+                            double[] gHigh = new double[gn], gLow = new double[gn];
+                            double[] gClose = new double[gn];
+                            for (int gi = 0; gi < gn; gi++) {
+                                gHigh[gi] = gk.get(gi).get(2).asDouble();
+                                gLow[gi] = gk.get(gi).get(3).asDouble();
+                                gClose[gi] = gk.get(gi).get(4).asDouble();
+                            }
+                            double gAtr = TradeMath.atrLast(gHigh, gLow, gClose, 14, 0);
+                            if (gAtr > 0) {
+                                // ATR 带宽按 1h ATR 相对开仓价折算成百分比
+                                double gAtrPct = gAtr / entry * 100.0;
+                                // 允许 N×ATR 的插针波动, 带宽上限兜底为 |sl| 的 2 倍(避免无限放大)
+                                double gTolerance = Math.abs(sl) * 2.0;
+                                if (gBreach >= (-sl) && gBreach < Math.min(gAtrPct * ATR_PROTECT_MULT, gTolerance)) {
+                                    gAtrProtectHit = true;
+                                    log.info("[auto-close:{}] {} G-ATR保护: 跌幅{}%触及sl={}%但仍在{}xATR({}%)内, 判定插针暂不扫损",
+                                            user.getUsername(), sym0, String.format("%.2f", gBreach), sl,
+                                            ATR_PROTECT_MULT, String.format("%.2f", gAtrPct * ATR_PROTECT_MULT));
+                                }
+                            }
+                        }
+                    } catch (Exception gAtrErr) {
+                        log.warn("[auto-close:{}] {} G-ATR计算失败, 退固定止损: {}", user.getUsername(), sym0, gAtrErr.getMessage());
+                    }
+                }
+                if (!gAtrProtectHit && pricePct <= sl) { // 价格跌幅达到 sl%(如 -15) 才止损
                     log.info("[auto-close:{}] {} G价格止损 价格跌幅={}% <= sl={}% (entry={},last={})",
                             user.getUsername(), sym0, String.format("%.2f", pricePct), sl,
                             String.format("%.6g", entry), String.format("%.6g", last));
@@ -867,6 +957,9 @@ public class TradeEngineService {
                         if ("sl".equals(reason)) {
                             slCooldownEnds.put(sym0, System.currentTimeMillis() + SL_COOLDOWN_MS);
                             log.info("[auto-close:{}] {} 止损冷却计时 {} 分钟", user.getUsername(), sym0, SL_COOLDOWN_MS / 60000);
+
+                            // [v3.14 P1-假突破过滤] 记录本次止损时间戳, 统计近窗口内高频止损次数
+                            recordSlFreq(sym0, System.currentTimeMillis());
                         }
                         closePositionRecord(pos, BigDecimal.valueOf(last), reason,
                                 BigDecimal.valueOf(pnl), BigDecimal.valueOf(ratio), userId);
@@ -1057,6 +1150,17 @@ public class TradeEngineService {
                     && "H".equalsIgnoreCase(cand.get("strategy").toString());
             double effOpenMargin = isH ? accountTotal * 0.25 : openMargin;
             int effLeverage = isH ? 150 : leverage;
+
+            // [v3.13.1 P0-G杠杆封顶] G策略(日内多空)高配杠杆20x会导致价格仅跌~5%即爆仓, 止损形同虚设。
+            //   G 是价格口径止损(固定 -5%~-15%), 杠杆必须与止损带宽匹配: 封顶 5x, 保证价格跌到止损位前
+            //   账户保证金仍有充足缓冲(5x 下价格反向 20% 才爆仓, 远大于 sl 带宽)。仅作用于 G, 不影响 H(150x) 与其他策略。
+            boolean isGStratLev = cand.get("strategy") != null
+                    && "G".equalsIgnoreCase(cand.get("strategy").toString());
+            if (isGStratLev && effLeverage > G_LEVERAGE_CAP) {
+                log.info("[auto-trade:{}] {} G策略杠杆封顶 {}x -> {}x (防价格止损前爆仓)",
+                        user.getUsername(), rawSymbol(cand.get("symbol").toString()), effLeverage, G_LEVERAGE_CAP);
+                effLeverage = G_LEVERAGE_CAP;
+            }
 
             if (held.contains(sym0)) continue;
 
