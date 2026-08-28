@@ -10,7 +10,7 @@
         <div class="logo-wrap">
           <span class="logo-icon">🪙</span>
           <span class="logo-text">妖币交易系统</span>
-          <span class="logo-version">V3.7.0</span>
+          <span class="logo-version">V3.14.0</span>
         </div>
       </div>
       <div class="header-right">
