@@ -1182,6 +1182,9 @@ public class TradeEngineService {
                     op.setTargetPrice(optDec(cand, "target_price"));
                     op.setProtectPrice(optDec(cand, "protect_price"));
                     op.setReducePrice(optDec(cand, "reduce_price"));
+                    // [v3.13 P0-3] ATR 自适应止损：持久化信号侧计算的 ATR 与 ATR 缓冲止损价
+                    op.setAtr(optDec(cand, "atr"));
+                    op.setAtrStopPrice(optDec(cand, "atr_stop_price"));
                 }
                 openPositionMapper.insert(op);
 

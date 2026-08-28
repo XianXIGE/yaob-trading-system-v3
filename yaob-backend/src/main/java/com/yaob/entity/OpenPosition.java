@@ -51,4 +51,10 @@ public class OpenPosition {
     private BigDecimal protectPrice;      // 保护位(移动止损)
     @TableField("reduce_price")
     private BigDecimal reducePrice;       // 回踩减仓位
+
+    // [v3.13 系统优化 P0-3] ATR 自适应止损：信号侧计算的 ATR 波动尺度与 ATR 缓冲止损价
+    @TableField("atr")
+    private BigDecimal atr;               // 开仓时 ATR(14)，用于后续自适应风控
+    @TableField("atr_stop_price")
+    private BigDecimal atrStopPrice;      // 2×ATR 缓冲后的绝对止损价（更宽，防插针扫损）
 }

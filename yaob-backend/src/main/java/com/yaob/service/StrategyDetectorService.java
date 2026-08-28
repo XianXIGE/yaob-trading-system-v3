@@ -524,6 +524,19 @@ public class StrategyDetectorService {
                 // 回踩减仓位：多买回踩 EMA20、空反弹至 EMA20
                 double reducePrice = isLong ? Math.min(e20, cur) : Math.max(e20, cur);
 
+                // [v3.13 系统优化 P0-3] ATR 自适应止损缓冲：
+                // 妖币高波动下固定百分比/结构位止损易被插针瞬时扫损，故在结构性防守位基础上
+                // 叠加 2×ATR 缓冲带（更宽），同时把 ATR 传给引擎用于知悉该仓波动尺度。
+                // atr 已在函数顶部由 1h K线算出（TR 均值，period=14）。
+                double atrStopPrice;
+                if (isLong) {
+                    atrStopPrice = Math.min(defensePrice, cur - 2 * atr); // 取更保守(更低)止损位
+                } else {
+                    atrStopPrice = Math.max(defensePrice, cur + 2 * atr); // 取更保守(更高)止损位
+                }
+                if (atr > 0 && atrStopPrice > 0) sig.put("atr_stop_price", round4(atrStopPrice));
+                sig.put("atr", round4(atr));
+
                 sig.put("defense_price", round4(defensePrice));
                 sig.put("target_price", round4(targetPrice));
                 sig.put("protect_price", round4(protectPrice));
